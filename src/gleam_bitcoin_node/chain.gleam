@@ -1,5 +1,6 @@
 import gleam_bitcoin_node/codec
 import gleam_bitcoin_node/hash
+import gleam_bitcoin_node/params
 import gleam_bitcoin_node/pow
 
 pub type Chain {
@@ -59,7 +60,6 @@ fn connect(chain: Chain, parsed: codec.Parsed) -> Result(Chain, String) {
 }
 
 fn genesis() -> BitArray {
-  let assert Ok(hash) =
-    hash.from_display("0f9188f13cb7b2c71f2a335e3a4fc328bf5beb436012afca590b1a11466e2206")
+  let assert Ok(hash) = hash.from_display(params.regtest().genesis_hash)
   hash
 }
