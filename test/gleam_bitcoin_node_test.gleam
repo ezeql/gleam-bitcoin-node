@@ -10,6 +10,7 @@ import gleam_bitcoin_node/headers
 import gleam_bitcoin_node/kernel
 import gleam_bitcoin_node/pow
 import gleam_bitcoin_node/merkle
+import gleam_bitcoin_node/p2p
 import gleam_bitcoin_node/params
 import gleam_bitcoin_node/script
 import gleam_bitcoin_node/tx
@@ -474,6 +475,41 @@ fn reorg_cli(args: String) -> String {
     "bitcoin-cli -regtest -datadir=/tmp/btc-reorg -rpcport=18455 -rpcuser=e2e -rpcpassword=e2e "
     <> args
     <> " 2>&1",
+  )
+  |> string.trim
+}
+
+pub fn p2p_handshake_test() {
+  start_node_listen("/tmp/btc-p2p", "18471", "18470")
+  let assert Ok(Nil) = p2p.handshake_v1("127.0.0.1", 18470)
+  let assert Ok(Nil) = p2p.handshake_v2("127.0.0.1", 18470)
+  let info = p2p_cli("getpeerinfo")
+  string.contains(info, "\"transport_protocol_type\": \"v1\"") |> should.equal(True)
+  string.contains(info, "\"transport_protocol_type\": \"v2\"") |> should.equal(True)
+  p2p.addrman_count() |> should.equal(2)
+}
+
+fn start_node_listen(dir: String, rpc: String, p2p: String) -> Nil {
+  let _ = cmd("mkdir -p " <> dir)
+  let _ =
+    cmd(
+      "bitcoind -regtest -datadir="
+      <> dir
+      <> " -daemonwait -listen=1 -bind=127.0.0.1:"
+      <> p2p
+      <> " -port="
+      <> p2p
+      <> " -v2transport=1 -dnsseed=0 -connect=0 -txindex=1 -rpcuser=e2e -rpcpassword=e2e -rpcport="
+      <> rpc,
+    )
+  Nil
+}
+
+fn p2p_cli(args: String) -> String {
+  cmd(
+    "bitcoin-cli -regtest -datadir=/tmp/btc-p2p -rpcport=18471 -rpcuser=e2e -rpcpassword=e2e "
+    <> args
+    <> " 2>/dev/null",
   )
   |> string.trim
 }

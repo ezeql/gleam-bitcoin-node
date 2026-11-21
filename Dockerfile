@@ -26,7 +26,18 @@ RUN git clone --depth 1 --branch v32.1 https://github.com/bitcoin/bitcoin /tmp/b
   && cmake --build /tmp/bitcoin/build-kernel -j"$(nproc)" \
   && lib="$(find /tmp/bitcoin/build-kernel -name 'libbitcoinkernel.so' -print -quit)" \
   && cp -L "$lib" /usr/local/lib/libbitcoinkernel.so \
-  && find "$(dirname "$lib")" -name 'libsecp256k1.so*' -exec cp -L {} /usr/local/lib/ \; \
+  && cmake -S /tmp/bitcoin/src/secp256k1 -B /tmp/bitcoin/build-secp \
+       -DBUILD_SHARED_LIBS=ON \
+       -DSECP256K1_ENABLE_MODULE_ELLSWIFT=ON \
+       -DSECP256K1_BUILD_BENCHMARK=OFF \
+       -DSECP256K1_BUILD_TESTS=OFF \
+       -DSECP256K1_BUILD_EXHAUSTIVE_TESTS=OFF \
+  && cmake --build /tmp/bitcoin/build-secp -j"$(nproc)" \
+  && find /tmp/bitcoin/build-secp -name 'libsecp256k1.so*' -exec cp -a {} /usr/local/lib/ \; \
+  && if [ ! -e /usr/local/lib/libsecp256k1.so ]; then \
+       real="$(find /usr/local/lib -name 'libsecp256k1.so.*' -print -quit)"; \
+       cp -L "$real" /usr/local/lib/libsecp256k1.so; \
+     fi \
   && cp /tmp/bitcoin/src/kernel/bitcoinkernel.h /usr/local/include/bitcoinkernel.h \
   && ldconfig \
   && rm -rf /tmp/bitcoin
@@ -42,7 +53,10 @@ RUN gleam deps download && gleam build \
   && erl -noshell -eval 'io:format("~ts/erts-~ts/include", [code:root_dir(), erlang:system_info(version)]), halt().' > /tmp/erts_inc \
   && gcc -fPIC -shared -O2 -std=c11 -I"$(cat /tmp/erts_inc)" -I/usr/local/include \
        native/kernel_nif.c -o /usr/local/lib/gleam_kernel_nif.so \
-       -L/usr/local/lib -lbitcoinkernel -Wl,-rpath,/usr/local/lib
+       -L/usr/local/lib -lbitcoinkernel -Wl,-rpath,/usr/local/lib \
+  && gcc -fPIC -shared -O2 -std=c11 -I"$(cat /tmp/erts_inc)" \
+       native/secp_nif.c -o /usr/local/lib/gleam_secp_nif.so \
+       -L/usr/local/lib -lsecp256k1 -Wl,-rpath,/usr/local/lib
 
 COPY docker/e2e.sh /e2e.sh
 RUN chmod +x /e2e.sh
