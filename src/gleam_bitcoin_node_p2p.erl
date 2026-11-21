@@ -1,5 +1,5 @@
 -module(gleam_bitcoin_node_p2p).
--export([handshake_v1/2, handshake_v2/2, addrman_count/0, sync_headers/2]).
+-export([handshake_v1/2, handshake_v2/2, addrman_count/0, sync_headers/2, download_blocks/2, fetch_cmpct/3]).
 
 -define(MAGIC, <<16#fa, 16#bf, 16#b5, 16#da>>).
 -define(REKEY, 224).
@@ -54,6 +54,123 @@ sync_headers(Host, Port) ->
         {ok, Headers}
     catch
         _:Reason -> {error, reason(Reason)}
+    end.
+
+download_blocks(Host, Port) ->
+    try
+        Sock = connect(Host, Port),
+        ok = gen_tcp:send(Sock, frame(<<"version">>, version_payload())),
+        Rest0 = await_verack_rest(Sock, <<>>),
+        ok = gen_tcp:send(Sock, frame(<<"verack">>, <<>>)),
+        ok = gen_tcp:send(Sock, frame(<<"getheaders">>, getheaders())),
+        {Headers, Rest} = collect_headers_rest(Sock, Rest0, []),
+        Hashes = [block_hash(H) || H <- Headers],
+        Got = pipeline(Sock, Hashes, #{}, [], Rest, false),
+        remember(v1),
+        {ok, [maps:get(H, Got) || H <- Hashes]}
+    catch
+        _:Reason -> {error, reason(Reason)}
+    end.
+
+fetch_cmpct(Host, Port, Hex) ->
+    try
+        Hash = reverse(binary:decode_hex(Hex)),
+        Sock = connect(Host, Port),
+        ok = gen_tcp:send(Sock, frame(<<"version">>, version_payload())),
+        Rest = await_verack_rest(Sock, <<>>),
+        ok = gen_tcp:send(Sock, frame(<<"verack">>, <<>>)),
+        ok = gen_tcp:send(Sock, frame(<<"sendcmpct">>, <<0, 2:64/little>>)),
+        ok = gen_tcp:send(Sock, frame(<<"getdata">>, <<1, 4:32/little, Hash/binary>>)),
+        remember(v1),
+        {ok, wait_cmd(Sock, Rest, <<"cmpctblock">>)}
+    catch
+        _:Reason -> {error, reason(Reason)}
+    end.
+
+block_hash(Header) ->
+    crypto:hash(sha256, crypto:hash(sha256, Header)).
+
+pipeline(_Sock, [], Got, [], _Buf, _Retried) ->
+    Got;
+pipeline(Sock, Remaining, Got, Inflight, Buf, Retried) ->
+    {Remaining1, Inflight1} = fill_window(Sock, Remaining, Inflight),
+    case read_block(Sock, Buf) of
+        timeout when Retried ->
+            error(stall);
+        timeout ->
+            ok = send_getdata(Sock, Inflight1),
+            pipeline(Sock, Remaining1, Got, Inflight1, <<>>, true);
+        {Hash, Raw, Rest} ->
+            pipeline(Sock, Remaining1, Got#{Hash => Raw}, lists:delete(Hash, Inflight1), Rest, false)
+    end.
+
+fill_window(Sock, Remaining, Inflight) ->
+    Room = 16 - length(Inflight),
+    case Room > 0 andalso Remaining =/= [] of
+        false -> {Remaining, Inflight};
+        true ->
+            {Ask, Rest} = take(Room, Remaining),
+            ok = send_getdata(Sock, Ask),
+            {Rest, Inflight ++ Ask}
+    end.
+
+take(0, List) -> {[], List};
+take(_, []) -> {[], []};
+take(N, [H | T]) ->
+    {Ask, Rest} = take(N - 1, T),
+    {[H | Ask], Rest}.
+
+send_getdata(Sock, Hashes) ->
+    Invs = << <<16#40000002:32/little, H/binary>> || H <- Hashes >>,
+    gen_tcp:send(Sock, frame(<<"getdata">>, <<(length(Hashes)), Invs/binary>>)).
+
+read_block(Sock, Buf) ->
+    case one_frame(Buf) of
+        need_more ->
+            case gen_tcp:recv(Sock, 0, 3000) of
+                {ok, More} -> read_block(Sock, <<Buf/binary, More/binary>>);
+                {error, timeout} -> timeout
+            end;
+        {<<"block">>, Payload, Rest} ->
+            {block_hash(binary:part(Payload, 0, 80)), Payload, Rest};
+        {<<"ping">>, Nonce, Rest} ->
+            ok = gen_tcp:send(Sock, frame(<<"pong">>, Nonce)),
+            read_block(Sock, Rest);
+        {_, _, Rest} ->
+            read_block(Sock, Rest)
+    end.
+
+wait_cmd(Sock, Buf, Want) ->
+    case one_frame(Buf) of
+        need_more ->
+            {ok, More} = gen_tcp:recv(Sock, 0, 10000),
+            wait_cmd(Sock, <<Buf/binary, More/binary>>, Want);
+        {<<"ping">>, Nonce, Rest} ->
+            ok = gen_tcp:send(Sock, frame(<<"pong">>, Nonce)),
+            wait_cmd(Sock, Rest, Want);
+        {Want, Payload, _Rest} ->
+            Payload;
+        {_, _, Rest} ->
+            wait_cmd(Sock, Rest, Want)
+    end.
+
+collect_headers_rest(Sock, Buf, Acc) ->
+    case one_frame(Buf) of
+        need_more ->
+            {ok, More} = gen_tcp:recv(Sock, 0, 10000),
+            collect_headers_rest(Sock, <<Buf/binary, More/binary>>, Acc);
+        {<<"ping">>, Nonce, Rest} ->
+            ok = gen_tcp:send(Sock, frame(<<"pong">>, Nonce)),
+            collect_headers_rest(Sock, Rest, Acc);
+        {<<"headers">>, Payload, Rest} ->
+            Batch = parse_headers(Payload),
+            Acc1 = Acc ++ Batch,
+            case length(Batch) < 2000 of
+                true -> {Acc1, Rest};
+                false -> collect_headers_rest(Sock, Rest, Acc1)
+            end;
+        {_, _, Rest} ->
+            collect_headers_rest(Sock, Rest, Acc)
     end.
 
 await_verack_rest(Sock, Buf) ->

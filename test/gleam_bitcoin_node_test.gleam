@@ -4,6 +4,7 @@ import gleam/list
 import gleam/string
 import gleam_bitcoin_node
 import gleam_bitcoin_node/codec
+import gleam_bitcoin_node/compact
 import gleam_bitcoin_node/consensus
 import gleam_bitcoin_node/hash
 import gleam_bitcoin_node/headers
@@ -506,6 +507,40 @@ pub fn presync_work_test() {
   |> should.equal(True)
   headers.reached_minimum(headers.regtest(), params.mainnet().minimum_chain_work)
   |> should.equal(False)
+}
+
+pub fn block_download_test() {
+  start_node_listen("/tmp/btc-bdl", "18475", "18474")
+  bdl_cli("createwallet e2e")
+  let addr = bdl_cli("getnewaddress")
+  let _ = bdl_cli("generatetoaddress 20 \"" <> addr <> "\"")
+  let assert 20 = bdl_count()
+  let assert Ok(blocks) = p2p.download_blocks("127.0.0.1", 18474)
+  list.length(blocks) |> should.equal(20)
+  let chain =
+    list.fold(blocks, gleam_bitcoin_node.new(), fn(chain, raw) {
+      let assert Ok(chain) = gleam_bitcoin_node.submit_block(chain, raw)
+      chain
+    })
+  let tip = bdl_cli("getbestblockhash")
+  gleam_bitcoin_node.tip_hex(chain) |> should.equal(tip)
+  let assert Ok(cmpct) = p2p.fetch_cmpct("127.0.0.1", 18474, tip)
+  let assert Ok(rebuilt) = compact.reconstruct(cmpct)
+  compact.header_hex(rebuilt) |> should.equal(tip)
+}
+
+fn bdl_count() -> Int {
+  let assert Ok(n) = int.parse(bdl_cli("getblockcount"))
+  n
+}
+
+fn bdl_cli(args: String) -> String {
+  cmd(
+    "bitcoin-cli -regtest -datadir=/tmp/btc-bdl -rpcport=18475 -rpcuser=e2e -rpcpassword=e2e "
+    <> args
+    <> " 2>/dev/null",
+  )
+  |> string.trim
 }
 
 fn hsync_count() -> Int {
