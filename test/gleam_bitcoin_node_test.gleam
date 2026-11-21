@@ -11,6 +11,7 @@ import gleam_bitcoin_node/codec
 import gleam_bitcoin_node/compact
 import gleam_bitcoin_node/consensus
 import gleam_bitcoin_node/esplora
+import gleam_bitcoin_node/filter
 import gleam_bitcoin_node/hash
 import gleam_bitcoin_node/headers
 import gleam_bitcoin_node/index
@@ -1523,6 +1524,44 @@ fn gleam_rpc(method: String, params: String) -> String {
 
 fn rpc_cli(args: String) -> String {
   node_cli("/tmp/btc-rpc", "18485", args <> " 2>&1")
+}
+
+pub fn block_filter_test() {
+  let _ = cmd("rm -rf /tmp/btc-filter")
+  let _ = cmd("mkdir -p /tmp/btc-filter")
+  let _ =
+    cmd(
+      "bitcoind -regtest -datadir=/tmp/btc-filter -daemonwait -listen=0 -blockfilterindex=1 -txindex=1 -fallbackfee=0.0002 -rpcuser=e2e -rpcpassword=e2e -rpcport=18489 -port=18488",
+    )
+  let _ = flt_cli("generatetodescriptor 3 \"raw(51)\"")
+  let index =
+    range(0, 3)
+    |> list.fold(filter.new(), fn(index, height) {
+      let hash = flt_cli("getblockhash " <> int.to_string(height))
+      let assert Ok(raw) = hex_decode(flt_cli("getblock " <> hash <> " 0"))
+      let assert Ok(index) = filter.push(index, gleam_bitcoin_node.new(), raw)
+      let assert [entry, ..] = index.entries
+      let core = flt_cli("getblockfilter " <> hash)
+      hash.encode_hex(entry.filter) |> should.equal(json_string(core, "filter"))
+      hash.display(entry.header) |> should.equal(json_string(core, "header"))
+      let message = filter.cfilter(entry.hash, entry.filter)
+      let size = bit_array.byte_size(entry.filter)
+      let assert Ok(tail) =
+        bit_array.slice(message, bit_array.byte_size(message) - size, size)
+      tail |> should.equal(entry.filter)
+      index
+    })
+  filter.get(filter.new(), <<0:size(256)>>) |> should.equal(Error("index"))
+  let assert [tip, ..] = index.entries
+  let hashes =
+    list.reverse(index.entries)
+    |> list.map(fn(entry) { entry.filter_hash })
+  bit_array.byte_size(filter.cfheaders(tip.hash, <<0:size(256)>>, hashes))
+  |> should.equal(1 + 32 + 32 + 1 + 32 * list.length(hashes))
+}
+
+fn flt_cli(args: String) -> String {
+  node_cli("/tmp/btc-filter", "18489", args)
 }
 
 fn hdr(args: String) -> String {
