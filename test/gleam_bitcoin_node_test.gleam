@@ -5,6 +5,7 @@ import gleam/string
 import gleam_bitcoin_node
 import gleam_bitcoin_node/codec
 import gleam_bitcoin_node/hash
+import gleam_bitcoin_node/params
 import gleeunit
 import gleeunit/should
 
@@ -16,6 +17,75 @@ fn hex_decode(hex: String) -> Result(BitArray, Nil)
 
 pub fn main() {
   gleeunit.main()
+}
+
+pub fn core_genesis_hashes_test() {
+  expect_genesis("", params.mainnet())
+  expect_genesis("-testnet", params.testnet())
+  expect_genesis("-testnet4", params.testnet4())
+  expect_genesis("-signet", params.signet())
+  expect_genesis("-regtest", params.regtest())
+}
+
+pub fn core_chain_params_test() {
+  let zero = string.repeat("0", 64)
+  expect_common(params.mainnet(), <<0xf9, 0xbe, 0xb4, 0xd9>>, 8333, 227_931, 388_381, 363_725, 419_328, 481_824, "000000000000024b89b42a942fe0d9fea3bb44ab7bd1b19115dd6a759c0808b8", "000000000000000000000000000000000000000145ec036acc5ba740052af1a0", "00000000000000000000748969ec33043c0e52a763c6dd5193861f559f2c72e3", 1815, 2016, -2)
+  expect_common(params.testnet(), <<0x0b, 0x11, 0x09, 0x07>>, 18_333, 21_111, 581_885, 330_776, 770_112, 834_624, "0000000023b3a96d3484e5abb3755c413e7d41500f8e2a5c3f0dd01299cd8ef8", "0000000000000000000000000000000000000000000017f49f702147f10c0eb6", "00000000b318a3703d14a844c55ef507f4c2fc8f8766e24271fd43c180c51637", 1512, 2016, -2)
+  expect_common(params.testnet4(), <<0x1c, 0x16, 0x3f, 0x28>>, 48_333, 1, 1, 1, 1, 1, zero, "000000000000000000000000000000000000000000000e346a558455ade8eca9", "0000000021df65b91665a342e26ceb05e54826ad7d8fcd40316230058fa3b865", 1512, 2016, -2)
+  expect_common(params.signet(), <<0x0a, 0x03, 0xcf, 0x40>>, 38_333, 1, 1, 1, 1, 1, zero, "00000000000000000000000000000000000000000000000000001090e9dc1520", "00000002a5e0ba0498f1e9f4591af0b66b63c654665efe65206fd0ae7bbaf923", 1815, 2016, -2)
+  expect_common(params.regtest(), <<0xfa, 0xbf, 0xb5, 0xda>>, 18_444, 1, 1, 1, 1, 0, zero, zero, zero, 108, 144, 0)
+
+  params.mainnet().signet_blocks |> should.equal(False)
+  params.testnet().signet_blocks |> should.equal(False)
+  params.testnet4().signet_blocks |> should.equal(False)
+  params.regtest().signet_blocks |> should.equal(False)
+  params.mainnet().signet_challenge |> should.equal(<<>>)
+  params.signet().signet_blocks |> should.equal(True)
+  let assert Ok(challenge) =
+    hex_decode(
+      "512103ad5e0edad18cb1f0fc0d28a3d4f1f3e445640337489abb10404f2d1e086be430210359ef5021964fe22d6f8e05b2463c9540ce96883fe3b278760f048f5189f2e6c452ae",
+    )
+  params.signet().signet_challenge |> should.equal(challenge)
+  params.get(params.Mainnet).genesis_hash
+  |> should.equal(params.mainnet().genesis_hash)
+}
+
+fn expect_genesis(flag: String, p: params.Params) {
+  p.genesis_hash |> should.equal(netcli(flag, "getblockhash 0"))
+}
+
+fn expect_common(
+  p: params.Params,
+  magic: BitArray,
+  port: Int,
+  bip34: Int,
+  bip65: Int,
+  bip66: Int,
+  csv: Int,
+  segwit: Int,
+  bip34_hash: String,
+  work: String,
+  assume: String,
+  threshold: Int,
+  period: Int,
+  start: Int,
+) {
+  p.magic |> should.equal(magic)
+  p.port |> should.equal(port)
+  p.bip34_height |> should.equal(bip34)
+  p.bip65_height |> should.equal(bip65)
+  p.bip66_height |> should.equal(bip66)
+  p.csv_height |> should.equal(csv)
+  p.segwit_height |> should.equal(segwit)
+  p.bip34_hash |> should.equal(bip34_hash)
+  p.minimum_chain_work |> should.equal(work)
+  p.assume_valid |> should.equal(assume)
+  p.testdummy.bit |> should.equal(28)
+  p.testdummy.threshold |> should.equal(threshold)
+  p.testdummy.period |> should.equal(period)
+  p.testdummy.start_time |> should.equal(start)
+  p.testdummy.timeout |> should.equal(9_223_372_036_854_775_807)
+  p.testdummy.min_activation_height |> should.equal(0)
 }
 
 pub fn regtest_tip_and_reject_test() {
@@ -117,6 +187,16 @@ fn grind(prefix: BitArray, nonce: Int) -> BitArray {
 }
 
 fn cli(args: String) -> String {
-  cmd("bitcoin-cli -regtest -rpcuser=e2e -rpcpassword=e2e " <> args <> " 2>/dev/null")
+  netcli("-regtest", args)
+}
+
+fn netcli(flag: String, args: String) -> String {
+  let prefix = case flag {
+    "" -> ""
+    _ -> flag <> " "
+  }
+  cmd(
+    "bitcoin-cli " <> prefix <> "-rpcuser=e2e -rpcpassword=e2e " <> args <> " 2>/dev/null",
+  )
   |> string.trim
 }
