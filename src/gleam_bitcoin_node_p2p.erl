@@ -1,5 +1,5 @@
 -module(gleam_bitcoin_node_p2p).
--export([handshake_v1/2, handshake_v2/2, addrman_count/0]).
+-export([handshake_v1/2, handshake_v2/2, addrman_count/0, sync_headers/2]).
 
 -define(MAGIC, <<16#fa, 16#bf, 16#b5, 16#da>>).
 -define(REKEY, 224).
@@ -41,6 +41,92 @@ handshake_v2(Host, Port) ->
 
 addrman_count() ->
     length(book()).
+
+sync_headers(Host, Port) ->
+    try
+        Sock = connect(Host, Port),
+        ok = gen_tcp:send(Sock, frame(<<"version">>, version_payload())),
+        Rest = await_verack_rest(Sock, <<>>),
+        ok = gen_tcp:send(Sock, frame(<<"verack">>, <<>>)),
+        ok = gen_tcp:send(Sock, frame(<<"getheaders">>, getheaders())),
+        Headers = collect_headers(Sock, Rest, []),
+        remember(v1),
+        {ok, Headers}
+    catch
+        _:Reason -> {error, reason(Reason)}
+    end.
+
+await_verack_rest(Sock, Buf) ->
+    case one_frame(Buf) of
+        need_more ->
+            {ok, More} = gen_tcp:recv(Sock, 0, 10000),
+            await_verack_rest(Sock, <<Buf/binary, More/binary>>);
+        {<<"verack">>, _, Rest} -> Rest;
+        {_, _, Rest} -> await_verack_rest(Sock, Rest)
+    end.
+
+getheaders() ->
+    <<70016:32/little, 1, (genesis_internal())/binary, 0:256>>.
+
+genesis_internal() ->
+    reverse(binary:decode_hex(<<"0f9188f13cb7b2c71f2a335e3a4fc328bf5beb436012afca590b1a11466e2206">>)).
+
+reverse(Bin) ->
+    reverse(Bin, <<>>).
+
+reverse(<<>>, Acc) -> Acc;
+reverse(<<B, Rest/binary>>, Acc) ->
+    reverse(Rest, <<B, Acc/binary>>).
+
+collect_headers(Sock, Buf, Acc) ->
+    case one_frame(Buf) of
+        need_more ->
+            {ok, More} = gen_tcp:recv(Sock, 0, 10000),
+            collect_headers(Sock, <<Buf/binary, More/binary>>, Acc);
+        {<<"ping">>, Nonce, Rest} ->
+            ok = gen_tcp:send(Sock, frame(<<"pong">>, Nonce)),
+            collect_headers(Sock, Rest, Acc);
+        {<<"headers">>, Payload, Rest} ->
+            Batch = parse_headers(Payload),
+            Acc1 = Acc ++ Batch,
+            case length(Batch) < 2000 of
+                true -> Acc1;
+                false -> collect_headers(Sock, Rest, Acc1)
+            end;
+        {_, _, Rest} ->
+            collect_headers(Sock, Rest, Acc)
+    end.
+
+parse_headers(Bin) ->
+    {Count, Rest} = compact(Bin),
+    take_hdrs(Count, Rest, []).
+
+take_hdrs(0, _, Acc) ->
+    lists:reverse(Acc);
+take_hdrs(N, <<Hdr:80/binary, 0, Rest/binary>>, Acc) ->
+    take_hdrs(N - 1, Rest, [Hdr | Acc]).
+
+compact(<<N, Rest/binary>>) when N < 253 ->
+    {N, Rest};
+compact(<<253, N:16/little, Rest/binary>>) ->
+    {N, Rest};
+compact(<<254, N:32/little, Rest/binary>>) ->
+    {N, Rest}.
+
+one_frame(Buf) when byte_size(Buf) < 24 ->
+    need_more;
+one_frame(<<16#FA, 16#BF, 16#B5, 16#DA, Cmd:12/binary, Len:32/little, _Sum:4/binary, Rest/binary>>) ->
+    case byte_size(Rest) >= Len of
+        false -> need_more;
+        true ->
+            <<Payload:Len/binary, Rest2/binary>> = Rest,
+            {cmd_bin(Cmd), Payload, Rest2}
+    end;
+one_frame(_) ->
+    error(bad_magic).
+
+cmd_bin(Cmd) ->
+    hd(binary:split(Cmd, <<0>>)).
 
 connect(Host, Port) ->
     {ok, Sock} = gen_tcp:connect(binary_to_list(Host), Port, [binary, {active, false}, {nodelay, true}], 10000),

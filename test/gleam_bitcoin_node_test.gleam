@@ -489,6 +489,39 @@ pub fn p2p_handshake_test() {
   p2p.addrman_count() |> should.equal(2)
 }
 
+pub fn header_sync_test() {
+  start_node_listen("/tmp/btc-hsync", "18473", "18472")
+  hsync_cli("createwallet e2e")
+  let addr = hsync_cli("getnewaddress")
+  let _ = hsync_cli("generatetoaddress 5 \"" <> addr <> "\"")
+  let assert 5 = hsync_count()
+  let assert Ok(raws) = p2p.sync_headers("127.0.0.1", 18472)
+  list.length(raws) |> should.equal(5)
+  let assert Ok(chain) = headers.ingest(headers.regtest(), raws, unix_now())
+  headers.tip_hex(chain) |> should.equal(hsync_cli("getbestblockhash"))
+}
+
+pub fn presync_work_test() {
+  headers.reached_minimum(headers.regtest(), params.regtest().minimum_chain_work)
+  |> should.equal(True)
+  headers.reached_minimum(headers.regtest(), params.mainnet().minimum_chain_work)
+  |> should.equal(False)
+}
+
+fn hsync_count() -> Int {
+  let assert Ok(n) = int.parse(hsync_cli("getblockcount"))
+  n
+}
+
+fn hsync_cli(args: String) -> String {
+  cmd(
+    "bitcoin-cli -regtest -datadir=/tmp/btc-hsync -rpcport=18473 -rpcuser=e2e -rpcpassword=e2e "
+    <> args
+    <> " 2>/dev/null",
+  )
+  |> string.trim
+}
+
 fn start_node_listen(dir: String, rpc: String, p2p: String) -> Nil {
   let _ = cmd("mkdir -p " <> dir)
   let _ =
