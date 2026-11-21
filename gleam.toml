@@ -2,7 +2,7 @@ name = "gleam_bitcoin_node"
 version = "0.1.0"
 description = "Experimental Gleam port of the exnode Bitcoin node. Regtest only. Not safe for funds."
 licences = ["MIT"]
-gleam = ">= 1.11.0"
+gleam = ">= 1.12.0"
 repository = { type = "github", user = "ezeql", repo = "gleam-bitcoin-node" }
 
 [dependencies]

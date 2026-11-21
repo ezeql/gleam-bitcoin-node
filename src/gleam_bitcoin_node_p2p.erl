@@ -1,5 +1,7 @@
 -module(gleam_bitcoin_node_p2p).
--export([handshake_v1/2, handshake_v2/2, addrman_count/0, sync_headers/2, download_blocks/2, fetch_cmpct/3]).
+-export([handshake_v1/2, handshake_v2/2, addrman_count/0, sync_headers/2, download_blocks/2, fetch_cmpct/3, hostile/1, pull_abuse/2]).
+
+-define(MAX_MESSAGE, 4000000).
 
 -define(MAGIC, <<16#fa, 16#bf, 16#b5, 16#da>>).
 -define(REKEY, 224).
@@ -71,6 +73,54 @@ download_blocks(Host, Port) ->
     catch
         _:Reason -> {error, reason(Reason)}
     end.
+
+hostile(Port) ->
+    Opts = [binary, {active, false}, {reuseaddr, true}, {nodelay, true}],
+    case gen_tcp:listen(Port, Opts) of
+        {ok, Listen} ->
+            spawn(fun() -> hostile_loop(Listen) end),
+            {ok, nil};
+        {error, Reason} -> {error, reason(Reason)}
+    end.
+
+hostile_loop(Listen) ->
+    try
+        case gen_tcp:accept(Listen, 10000) of
+            {ok, Sock} ->
+                ok = gen_tcp:send(Sock, frame(<<"version">>, version_payload())),
+                ok = gen_tcp:send(Sock, frame(<<"verack">>, <<>>)),
+                ok = await_verack(Sock, <<>>, false),
+                ok = gen_tcp:send(Sock, oversized()),
+                _ = gen_tcp:recv(Sock, 0, 5000),
+                gen_tcp:close(Sock);
+            _ -> ok
+        end
+    after
+        gen_tcp:close(Listen)
+    end.
+
+oversized() ->
+    <<?MAGIC/binary, (pad(<<"ping">>))/binary, (?MAX_MESSAGE + 1):32/little, 0:32>>.
+
+pull_abuse(Host, Port) ->
+    try
+        Sock = connect(Host, Port),
+        ok = gen_tcp:send(Sock, frame(<<"version">>, version_payload())),
+        Rest = await_verack_rest(Sock, <<>>),
+        ok = gen_tcp:send(Sock, frame(<<"verack">>, <<>>)),
+        Header = fill_header(Sock, Rest),
+        gen_tcp:close(Sock),
+        {ok, Header}
+    catch
+        _:Reason -> {error, reason(Reason)}
+    end.
+
+fill_header(_Sock, Buf) when byte_size(Buf) >= 24 ->
+    <<Header:24/binary, _/binary>> = Buf,
+    Header;
+fill_header(Sock, Buf) ->
+    {ok, More} = gen_tcp:recv(Sock, 0, 10000),
+    fill_header(Sock, <<Buf/binary, More/binary>>).
 
 fetch_cmpct(Host, Port, Hex) ->
     try
@@ -233,11 +283,15 @@ compact(<<254, N:32/little, Rest/binary>>) ->
 one_frame(Buf) when byte_size(Buf) < 24 ->
     need_more;
 one_frame(<<16#FA, 16#BF, 16#B5, 16#DA, Cmd:12/binary, Len:32/little, _Sum:4/binary, Rest/binary>>) ->
-    case byte_size(Rest) >= Len of
-        false -> need_more;
-        true ->
-            <<Payload:Len/binary, Rest2/binary>> = Rest,
-            {cmd_bin(Cmd), Payload, Rest2}
+    case Len > ?MAX_MESSAGE of
+        true -> error(oversized);
+        false ->
+            case byte_size(Rest) >= Len of
+                false -> need_more;
+                true ->
+                    <<Payload:Len/binary, Rest2/binary>> = Rest,
+                    {cmd_bin(Cmd), Payload, Rest2}
+            end
     end;
 one_frame(_) ->
     error(bad_magic).
@@ -297,12 +351,16 @@ frames(Buf) ->
 frames(Buf, Acc) when byte_size(Buf) < 24 ->
     {lists:reverse(Acc), Buf};
 frames(<<16#FA, 16#BF, 16#B5, 16#DA, Cmd:12/binary, Len:32/little, _Sum:4/binary, Rest/binary>> = Buf, Acc) ->
-    case byte_size(Rest) >= Len of
-        false -> {lists:reverse(Acc), Buf};
-        true ->
-            <<_Payload:Len/binary, Rest2/binary>> = Rest,
-            Name = cmd_name(Cmd),
-            frames(Rest2, [Name | Acc])
+    case Len > ?MAX_MESSAGE of
+        true -> error(oversized);
+        false ->
+            case byte_size(Rest) >= Len of
+                false -> {lists:reverse(Acc), Buf};
+                true ->
+                    <<_Payload:Len/binary, Rest2/binary>> = Rest,
+                    Name = cmd_name(Cmd),
+                    frames(Rest2, [Name | Acc])
+            end
     end;
 frames(_, Acc) ->
     {lists:reverse(Acc), <<>>}.
