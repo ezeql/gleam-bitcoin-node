@@ -5,12 +5,15 @@ import gleam/list
 import gleam/option.{Some}
 import gleam/string
 import gleam_bitcoin_node
+import gleam_bitcoin_node/address
 import gleam_bitcoin_node/chain
 import gleam_bitcoin_node/codec
 import gleam_bitcoin_node/compact
 import gleam_bitcoin_node/consensus
+import gleam_bitcoin_node/esplora
 import gleam_bitcoin_node/hash
 import gleam_bitcoin_node/headers
+import gleam_bitcoin_node/index
 import gleam_bitcoin_node/kernel
 import gleam_bitcoin_node/limits
 import gleam_bitcoin_node/mempool
@@ -1344,6 +1347,110 @@ fn zero_tail(n: Int, acc: BitArray) -> BitArray {
   case n {
     0 -> acc
     _ -> zero_tail(n - 1, <<acc:bits, 0>>)
+  }
+}
+
+pub fn esplora_index_test() {
+  let _ = cmd("rm -rf /tmp/btc-esplora")
+  start_node("/tmp/btc-esplora", "18481", "18480")
+  let _ = es_cli("createwallet e2e")
+  let addr = es_cli("-rpcwallet=e2e getnewaddress")
+  let _ = es_cli("-rpcwallet=e2e generatetoaddress 2 \"" <> addr <> "\"")
+  let assert Ok(count) = int.parse(es_cli("getblockcount"))
+  let view =
+    range(1, count)
+    |> list.fold(index.new(), fn(view, height) {
+      let assert Ok(view) = index.connect(view, es_block(height))
+      view
+    })
+  index.tip(view) |> should.equal(es_cli("getbestblockhash"))
+
+  let assert Ok(#(0, program)) =
+    address.witness("bc", "bc1qw508d6qejxtdg4y5r3zarvary0c5xw7kv8f3t4")
+  bit_array.byte_size(program) |> should.equal(20)
+
+  let info = es_cli("-rpcwallet=e2e getaddressinfo " <> addr)
+  let assert Ok(script) = address.to_script(addr)
+  hash.encode_hex(script) |> should.equal(json_string(info, "scriptPubKey"))
+
+  let assert Ok(Nil) = esplora.start(18_482)
+  esplora.publish(view)
+  http_get("/blocks/tip/hash") |> should.equal(es_cli("getbestblockhash"))
+  must_contain(http_get("/block/" <> index.tip(view)), "\"height\":2")
+  must_contain(http_get("/address/" <> addr), addr)
+
+  let body = http_get("/address/" <> addr <> "/utxo")
+  let scan = es_cli("scantxoutset start '[\"addr(" <> addr <> ")\"]'")
+  let txids = json_strings(scan, "txid", [])
+  list.each(txids, fn(txid) { must_contain(body, txid) })
+  count_text(body, "\"value\":5000000000") |> should.equal(2)
+
+  let assert Ok(txid) = list.first(txids)
+  must_contain(http_get("/tx/" <> txid), "\"confirmed\":true")
+  let raw =
+    es_cli(
+      "createrawtransaction '[{\"txid\":\""
+      <> txid
+      <> "\",\"vout\":0}]' '{\""
+      <> addr
+      <> "\":49.999}'",
+    )
+  let signed = es_cli("-rpcwallet=e2e signrawtransactionwithwallet " <> raw)
+  let hex = json_string(signed, "hex")
+  let posted = http_post("/tx", hex)
+  must_contain(posted, "bad-txns-premature-spend-of-coinbase")
+  must_contain(es_cli("sendrawtransaction " <> hex), posted)
+
+  let assert Ok(view) = index.disconnect(view)
+  esplora.publish(view)
+  http_get("/blocks/tip/hash") |> should.equal(es_cli("getblockhash 1"))
+  count_text(http_get("/address/" <> addr <> "/utxo"), "\"value\":5000000000")
+  |> should.equal(1)
+  http_post("/tx", "zz") |> should.equal("Invalid transaction hex")
+}
+
+fn es_block(height: Int) -> BitArray {
+  let hex =
+    es_cli(
+      "getblock " <> es_cli("getblockhash " <> int.to_string(height)) <> " 0",
+    )
+  let assert Ok(raw) = hex_decode(hex)
+  raw
+}
+
+fn es_cli(args: String) -> String {
+  node_cli("/tmp/btc-esplora", "18481", args)
+}
+
+fn http_get(path: String) -> String {
+  string.trim(cmd("curl -sf http://127.0.0.1:18482" <> path))
+}
+
+fn http_post(path: String, body: String) -> String {
+  string.trim(cmd(
+    "curl -s -X POST --data " <> body <> " http://127.0.0.1:18482" <> path,
+  ))
+}
+
+fn count_text(text: String, needle: String) -> Int {
+  list.length(string.split(text, needle)) - 1
+}
+
+fn must_contain(text: String, needle: String) -> Nil {
+  case string.contains(text, needle) {
+    True -> Nil
+    False -> text |> should.equal(needle)
+  }
+}
+
+fn json_strings(json: String, key: String, acc: List(String)) -> List(String) {
+  case string.split_once(json, "\"" <> key <> "\": \"") {
+    Error(_) -> list.reverse(acc)
+    Ok(#(_, rest)) ->
+      case string.split_once(rest, "\"") {
+        Error(_) -> list.reverse(acc)
+        Ok(#(value, rest)) -> json_strings(rest, key, [value, ..acc])
+      }
   }
 }
 
