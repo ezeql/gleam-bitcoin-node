@@ -5,6 +5,8 @@ import gleam/string
 import gleam_bitcoin_node
 import gleam_bitcoin_node/codec
 import gleam_bitcoin_node/hash
+import gleam_bitcoin_node/headers
+import gleam_bitcoin_node/pow
 import gleam_bitcoin_node/merkle
 import gleam_bitcoin_node/params
 import gleam_bitcoin_node/tx
@@ -374,3 +376,118 @@ fn node_cli(dir: String, rpc: String, args: String) -> String {
   )
   |> string.trim
 }
+
+pub fn header_rules_test() {
+  let assert Ok(main_limit) = pow.target_of(0x1d00ffff)
+  pow.compact_of(main_limit) |> should.equal(0x1d00ffff)
+  let assert Ok(reg_limit) = pow.target_of(0x207fffff)
+  pow.compact_of(reg_limit) |> should.equal(0x207fffff)
+  pow.retarget(0x1d00ffff, 1_209_600, 0, 0x1d00ffff, False, False, 1_209_600, main_limit)
+  |> should.equal(0x1d00ffff)
+  pow.retarget(0x1c00ffff, 2_419_200, 0, 0x1c00ffff, False, False, 1_209_600, main_limit)
+  |> should.equal(0x1c01fffe)
+
+  let testnet = params.testnet()
+  let entries = [
+    headers.Entry(<<0:size(256)>>, 0, 1000, 0x1d00ffff, 1),
+    headers.Entry(<<0:size(256)>>, 1, 2000, 0x1c00ffff, 4),
+  ]
+  let assert Ok(last) = list.last(entries)
+  headers.next_bits(testnet, entries, last, 2000 + 1201)
+  |> should.equal(0x1d00ffff)
+  headers.next_bits(testnet, entries, last, 2100)
+  |> should.equal(0x1c00ffff)
+
+  let warped = [
+    headers.Entry(<<0:size(256)>>, 0, 0, 0x207fffff, 1),
+    headers.Entry(<<0:size(256)>>, 1, 0, 0x207fffff, 4),
+    headers.Entry(<<0:size(256)>>, 2, 0, 0x207fffff, 4),
+    headers.Entry(<<0:size(256)>>, 3, 0, 0x207fffff, 4),
+    headers.Entry(<<0:size(256)>>, 4, 0, 0x207fffff, 4),
+    headers.Entry(<<0:size(256)>>, 5, 0, 0x207fffff, 4),
+    headers.Entry(<<0:size(256)>>, 6, 0, 0x207fffff, 4),
+    headers.Entry(<<0:size(256)>>, 7, 0, 0x207fffff, 4),
+    headers.Entry(<<0:size(256)>>, 8, 0, 0x207fffff, 4),
+    headers.Entry(<<0:size(256)>>, 9, 0, 0x207fffff, 4),
+    headers.Entry(<<0:size(256)>>, 10, 0, 0x207fffff, 4),
+    headers.Entry(<<0:size(256)>>, 11, 20_000, 0x207fffff, 4),
+  ]
+  let assert Ok(prev) = list.last(warped)
+  let p = params.Params(..params.regtest(), pow_target_timespan: 600, enforce_bip94: True)
+  let attack = headers.Header(<<>>, <<>>, 4, <<>>, 1000, prev.bits)
+  headers.contextual(p, warped, prev, attack, 1_000_000)
+  |> should.equal(Error("time-timewarp-attack"))
+  let old = headers.Header(<<>>, <<>>, 4, <<>>, 0, prev.bits)
+  headers.contextual(p, warped, prev, old, 1_000_000)
+  |> should.equal(Error("time-too-old"))
+}
+
+pub fn header_chain_test() {
+  let _ = cmd("mkdir -p /tmp/btc-hdr")
+  let _ =
+    cmd(
+      "bitcoind -regtest -datadir=/tmp/btc-hdr -daemonwait -listen=0 -rpcuser=e2e -rpcpassword=e2e -rpcport=18449 -port=18450",
+    )
+  hdr("generatetodescriptor 20 \"raw(51)\"")
+  let now = unix_now()
+  let chain =
+    range(1, 20)
+    |> list.fold(headers.regtest(), fn(chain, height) {
+      let assert Ok(chain) = headers.submit(chain, header_at(height), now)
+      chain
+    })
+  let tip = headers.tip_hex(chain)
+  tip |> should.equal(hdr("getbestblockhash"))
+
+  let assert Ok(prev) = hash.from_display(tip)
+  let future = grind_header(prev, now + 3 * 60 * 60, 0x207fffff)
+  headers.submit(chain, future, now) |> should.equal(Error("time-too-new"))
+  headers.tip_hex(chain) |> should.equal(tip)
+
+  let wrong_bits = grind_header(prev, now, 0x207ffffe)
+  headers.submit(chain, wrong_bits, now) |> should.equal(Error("bad-diffbits"))
+  headers.tip_hex(chain) |> should.equal(tip)
+}
+
+fn range(from: Int, to: Int) -> List(Int) {
+  case from > to {
+    True -> []
+    False -> [from, ..range(from + 1, to)]
+  }
+}
+
+fn header_at(height: Int) -> BitArray {
+  let hex = hdr("getblock " <> hdr("getblockhash " <> int.to_string(height)) <> " 0")
+  let assert Ok(raw) = hex_decode(hex)
+  let assert Ok(header) = bit_array.slice(raw, 0, 80)
+  header
+}
+
+fn grind_header(prev: BitArray, time: Int, bits: Int) -> BitArray {
+  let prefix = <<4:32-little, prev:bits, 0:size(256), time:32-little, bits:32-little>>
+  grind_nonce(prefix, bits, 0)
+}
+
+fn grind_nonce(prefix: BitArray, bits: Int, nonce: Int) -> BitArray {
+  let header = <<prefix:bits, nonce:32-little>>
+  let assert Ok(limit) = pow.target_of(bits)
+  case hash.little_endian_int(hash.hash256(header)) <= limit {
+    True -> header
+    False -> grind_nonce(prefix, bits, nonce + 1)
+  }
+}
+
+fn unix_now() -> Int {
+  let assert Ok(now) = int.parse(string.trim(cmd("date +%s")))
+  now
+}
+
+fn hdr(args: String) -> String {
+  cmd(
+    "bitcoin-cli -regtest -datadir=/tmp/btc-hdr -rpcport=18449 -rpcuser=e2e -rpcpassword=e2e "
+    <> args
+    <> " 2>/dev/null",
+  )
+  |> string.trim
+}
+

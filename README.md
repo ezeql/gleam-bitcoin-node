@@ -12,4 +12,4 @@ No instala nada en la máquina. Hace falta Docker.
 make test
 ```
 
-Eso construye una imagen con Gleam y Bitcoin Core 32.1, mina bloques vacíos en regtest y compara el tip. Un bloque con merkle mala y otro con subsidio de más tienen que ser rechazados sin mover el tip. El hash de génesis de mainnet, testnet, testnet4, signet y regtest tiene que coincidir con bitcoind.
+Eso construye una imagen con Gleam y Bitcoin Core 32.1, mina bloques vacíos en regtest y compara el tip. Un bloque con merkle mala y otro con subsidio de más tienen que ser rechazados sin mover el tip. El hash de génesis de mainnet, testnet, testnet4, signet y regtest tiene que coincidir con bitcoind. Las cabeceras que mina bitcoind se aceptan; una con bits o tiempo ilegal no mueve el tip de cabeceras.
