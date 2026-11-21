@@ -37,6 +37,11 @@ pub fn regtest() -> Chain {
   Chain(params.regtest(), [entry(header, 0)])
 }
 
+pub fn regtest_genesis_entry() -> Entry {
+  let assert Ok(header) = decode_hex(regtest_genesis)
+  entry(header, 0)
+}
+
 pub fn tip_hex(chain: Chain) -> String {
   hash.display(tip(chain).hash)
 }

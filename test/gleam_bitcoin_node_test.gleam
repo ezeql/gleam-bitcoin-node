@@ -4,11 +4,13 @@ import gleam/list
 import gleam/string
 import gleam_bitcoin_node
 import gleam_bitcoin_node/codec
+import gleam_bitcoin_node/consensus
 import gleam_bitcoin_node/hash
 import gleam_bitcoin_node/headers
 import gleam_bitcoin_node/pow
 import gleam_bitcoin_node/merkle
 import gleam_bitcoin_node/params
+import gleam_bitcoin_node/script
 import gleam_bitcoin_node/tx
 import gleeunit
 import gleeunit/should
@@ -18,6 +20,9 @@ fn cmd(command: String) -> String
 
 @external(erlang, "gleam_bitcoin_node_ffi", "hex_decode")
 fn hex_decode(hex: String) -> Result(BitArray, Nil)
+
+@external(erlang, "gleam_bitcoin_node_ffi", "hex_encode")
+fn hex_encode(data: BitArray) -> String
 
 pub fn main() {
   gleeunit.main()
@@ -248,11 +253,103 @@ pub fn regtest_tip_and_reject_test() {
   gleam_bitcoin_node.tip_hex(chain) |> should.equal(parent)
 
   let bad_amount = bump_subsidy(raw)
-  let assert Error("bad-cb-amount") = gleam_bitcoin_node.submit_block(chain, bad_amount)
-  gleam_bitcoin_node.tip_hex(chain) |> should.equal(parent)
+  same_reject(chain, bad_amount, "bad-cb-amount", parent)
+
+  let bad_height = rewrite_coinbase(raw, break_height)
+  same_reject(chain, bad_height, "bad-cb-height", parent)
+
+  let bad_final = rewrite_coinbase(raw, break_final)
+  same_reject(chain, bad_final, "bad-txns-nonfinal", parent)
 
   let chain = submit_hashes(chain, [block_hex_hash(hashes)])
   gleam_bitcoin_node.tip_hex(chain) |> should.equal(cli("getbestblockhash"))
+}
+
+fn same_reject(chain, raw: BitArray, reason: String, parent: String) -> Nil {
+  let assert Error(got) = gleam_bitcoin_node.submit_block(chain, raw)
+  got |> should.equal(reason)
+  // The real tip has the same work, so Core will not connect a sibling and
+  // submitblock stays "inconclusive". Drop that tip, then the reject runs.
+  let tip = cli("getbestblockhash")
+  let _ = cli("invalidateblock " <> tip)
+  submit_core(raw) |> should.equal(reason)
+  let _ = cli("reconsiderblock " <> tip)
+  gleam_bitcoin_node.tip_hex(chain) |> should.equal(parent)
+}
+
+fn submit_core(raw: BitArray) -> String {
+  cmd(
+    "bitcoin-cli -regtest -rpcuser=e2e -rpcpassword=e2e submitblock "
+    <> hex_encode(raw)
+    <> " 2>&1",
+  )
+  |> string.trim
+}
+
+fn rewrite_coinbase(raw: BitArray, change: fn(tx.Tx) -> tx.Tx) -> BitArray {
+  let assert Ok(block) = tx.decode_block(raw)
+  let assert [coin, ..rest] = block.txs
+  let txs = [reparse(change(coin)), ..rest]
+  let #(root, _) = merkle.block_root(txs)
+  regrind(tx.encode_block(tx.ParsedBlock(block.header, root, txs)), root)
+}
+
+fn reparse(item: tx.Tx) -> tx.Tx {
+  let assert Ok(#(parsed, rest)) = tx.decode(tx.encode(item))
+  let assert 0 = bit_array.byte_size(rest)
+  parsed
+}
+
+fn break_height(coin: tx.Tx) -> tx.Tx {
+  let assert [input, ..inputs] = coin.inputs
+  let size = bit_array.byte_size(input.script_sig)
+  let assert Ok(rest) = bit_array.slice(input.script_sig, 2, size - 2)
+  tx.Tx(..coin, inputs: [tx.Input(..input, script_sig: <<1, 99, rest:bits>>), ..inputs])
+}
+
+fn break_final(coin: tx.Tx) -> tx.Tx {
+  let assert [input, ..inputs] = coin.inputs
+  tx.Tx(
+    ..coin,
+    locktime: 0xfffffffe,
+    inputs: [tx.Input(..input, sequence: 0), ..inputs],
+  )
+}
+
+pub fn sigop_and_lock_test() {
+  script.sigop_count(<<0xac>>, False) |> should.equal(1)
+  script.sigop_count(<<0x51, 0xae>>, True) |> should.equal(1)
+  script.sigop_count(<<0x51, 0xae>>, False) |> should.equal(20)
+
+  let open = bare_tx(2, 0, 0xfffffffe)
+  consensus.is_final(open, 20, 1_000_000) |> should.equal(False)
+  consensus.is_final(bare_tx(2, 0xffffffff, 0xfffffffe), 20, 1_000_000)
+  |> should.equal(True)
+
+  let coin = consensus.Coin(value: 1, script: <<>>, height: 5, coinbase: False)
+  let locked = bare_tx(2, 10, 0)
+  consensus.sequence_ok(locked, [coin], True, 14, 0, fn(_height) { 0 })
+  |> should.equal(False)
+  consensus.sequence_ok(locked, [coin], True, 15, 0, fn(_height) { 0 })
+  |> should.equal(True)
+  consensus.sequence_ok(locked, [coin], False, 14, 0, fn(_height) { 0 })
+  |> should.equal(True)
+  consensus.sequence_ok(bare_tx(2, 0x8000000a, 0), [coin], True, 14, 0, fn(_height) { 0 })
+  |> should.equal(True)
+}
+
+fn bare_tx(version: Int, sequence: Int, locktime: Int) -> tx.Tx {
+  tx.Tx(
+    version: version,
+    inputs: [tx.Input(<<0:size(256)>>, 0, <<1, 2>>, sequence, [])],
+    outputs: [tx.Output(1, <<0x51>>)],
+    locktime: locktime,
+    raw: <<>>,
+    txid: <<0:size(256)>>,
+    wtxid: <<0:size(256)>>,
+    has_witness: False,
+    base_size: 0,
+  )
 }
 
 fn block_hex_hash(hashes: List(String)) -> String {
