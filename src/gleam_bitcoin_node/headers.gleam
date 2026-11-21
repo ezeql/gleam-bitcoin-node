@@ -46,6 +46,64 @@ pub fn tip_hex(chain: Chain) -> String {
   hash.display(tip(chain).hash)
 }
 
+pub fn ingest(
+  chain: Chain,
+  raws: List(BitArray),
+  now: Int,
+) -> Result(Chain, String) {
+  case apply_all(chain, raws, now) {
+    Error(reason) -> Error(reason)
+    Ok(next) ->
+      case reached_minimum(next, next.params.minimum_chain_work) {
+        True -> Ok(next)
+        False -> Ok(chain)
+      }
+  }
+}
+
+pub fn reached_minimum(chain: Chain, minimum_hex: String) -> Bool {
+  chain_work(chain.entries, 0) >= hex_int(minimum_hex)
+}
+
+fn apply_all(chain: Chain, raws: List(BitArray), now: Int) -> Result(Chain, String) {
+  case raws {
+    [] -> Ok(chain)
+    [raw, ..rest] ->
+      case submit(chain, raw, now) {
+        Error(reason) -> Error(reason)
+        Ok(chain) -> apply_all(chain, rest, now)
+      }
+  }
+}
+
+fn chain_work(entries: List(Entry), acc: Int) -> Int {
+  case entries {
+    [] -> acc
+    [entry, ..rest] -> chain_work(rest, acc + block_work(entry.bits))
+  }
+}
+
+fn block_work(bits: Int) -> Int {
+  case pow.target_of(bits) {
+    Error(_) -> 0
+    Ok(target) -> int.bitwise_shift_left(1, 256) / { target + 1 }
+  }
+}
+
+fn hex_int(hex: String) -> Int {
+  case hex_decode(hex) {
+    Ok(bytes) -> be_int(bytes, 0)
+    Error(_) -> 0
+  }
+}
+
+fn be_int(bytes: BitArray, acc: Int) -> Int {
+  case bytes {
+    <<byte, rest:bits>> -> be_int(rest, acc * 256 + byte)
+    _ -> acc
+  }
+}
+
 pub fn submit(chain: Chain, raw: BitArray, now: Int) -> Result(Chain, String) {
   case decode(raw) {
     Error(reason) -> Error(reason)
