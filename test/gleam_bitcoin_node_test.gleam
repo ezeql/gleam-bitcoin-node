@@ -24,6 +24,7 @@ import gleam_bitcoin_node/params
 import gleam_bitcoin_node/pow
 import gleam_bitcoin_node/rpc
 import gleam_bitcoin_node/script
+import gleam_bitcoin_node/track
 import gleam_bitcoin_node/tx
 import gleeunit
 import gleeunit/should
@@ -1558,6 +1559,52 @@ pub fn block_filter_test() {
     |> list.map(fn(entry) { entry.filter_hash })
   bit_array.byte_size(filter.cfheaders(tip.hash, <<0:size(256)>>, hashes))
   |> should.equal(1 + 32 + 32 + 1 + 32 * list.length(hashes))
+}
+
+pub fn core_track_test() {
+  let _ = cmd("rm -rf /tmp/btc-track")
+  let _ = cmd("mkdir -p /tmp/btc-track")
+  let _ =
+    cmd(
+      "bitcoind -regtest -datadir=/tmp/btc-track -daemonwait -listen=1 -bind=127.0.0.1:18492 -port=18492 -v2transport=1 -dnsseed=0 -connect=0 -blockfilterindex=1 -txindex=1 -fallbackfee=0.0002 -rpcuser=e2e -rpcpassword=e2e -rpcport=18493",
+    )
+  let hashes =
+    trk_cli("generatetodescriptor 4 \"raw(51)\"")
+    |> extract_hashes([])
+    |> list.reverse
+  let raws =
+    list.map(hashes, fn(hash) {
+      let assert Ok(raw) = hex_decode(trk_cli("getblock " <> hash <> " 0"))
+      raw
+    })
+  let assert [last, ..earlier] = list.reverse(raws)
+  let earlier = list.reverse(earlier)
+  let #(blob, manifest) = track.dataset(raws)
+  let assert Ok(replayed) = track.replay(blob)
+  chain.tip_hex(replayed) |> should.equal(manifest.last_hash)
+  manifest.last_hash |> should.equal(trk_cli("getbestblockhash"))
+  manifest.count |> should.equal(4)
+
+  let assert Ok(base) = track.replay(track.dataset(earlier).0)
+  let #(shadowed, verdict) = track.shadow(base, last)
+  verdict |> should.equal(track.Accepted(trk_cli("getbestblockhash")))
+  let bad = hex_encode(bump_subsidy(last))
+  let assert Ok(bad_raw) = hex_decode(bad)
+  let #(_, rejected) = track.shadow(shadowed, bad_raw)
+  let tip = trk_cli("getbestblockhash")
+  let _ = trk_cli("invalidateblock " <> tip)
+  let core = trk_cli("submitblock " <> bad)
+  let _ = trk_cli("reconsiderblock " <> tip)
+  rejected |> should.equal(track.Rejected(core))
+
+  let assert Ok(cmpct) = p2p.fetch_cmpct("127.0.0.1", 18_492, tip)
+  let expected = json_string(trk_cli("getblockfilter " <> tip), "filter")
+  let assert Ok(same) = track.property(shadowed, last, cmpct, expected)
+  same |> should.equal(trk_cli("getbestblockhash"))
+}
+
+fn trk_cli(args: String) -> String {
+  node_cli("/tmp/btc-track", "18493", args)
 }
 
 fn flt_cli(args: String) -> String {
