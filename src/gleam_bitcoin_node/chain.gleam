@@ -27,6 +27,10 @@ pub type Undo {
   Undo(prev: BitArray, spent: List(#(String, consensus.Coin)), created: List(String))
 }
 
+pub type Known {
+  Known(raw: BitArray, prev: BitArray, height: Int)
+}
+
 pub type Chain {
   Chain(
     height: Int,
@@ -34,6 +38,7 @@ pub type Chain {
     times: List(Int),
     coins: dict.Dict(String, consensus.Coin),
     undos: List(Undo),
+    blocks: dict.Dict(String, Known),
   )
 }
 
@@ -55,7 +60,14 @@ type View {
 
 pub fn new() -> Chain {
   let genesis = headers.regtest_genesis_entry()
-  Chain(height: 0, tip: genesis.hash, times: [genesis.time], coins: dict.new(), undos: [])
+  Chain(
+    height: 0,
+    tip: genesis.hash,
+    times: [genesis.time],
+    coins: dict.new(),
+    undos: [],
+    blocks: dict.new(),
+  )
 }
 
 pub fn tip_hex(chain: Chain) -> String {
@@ -78,6 +90,7 @@ pub fn disconnect_tip(chain: Chain) -> Result(Chain, String) {
         times: drop_last(chain.times),
         coins: coins,
         undos: rest,
+        blocks: chain.blocks,
       ))
     }
   }
@@ -86,8 +99,170 @@ pub fn disconnect_tip(chain: Chain) -> Result(Chain, String) {
 pub fn submit_block(chain: Chain, raw: BitArray) -> Result(Chain, String) {
   case tx.decode_block(raw) {
     Error(reason) -> Error(reason)
-    Ok(block) -> connect(chain, block)
+    Ok(block) -> route(chain, raw, block)
   }
+}
+
+fn route(chain: Chain, raw: BitArray, block: tx.ParsedBlock) -> Result(Chain, String) {
+  case block.header {
+    <<_:32-little, prev:bytes-size(32), _:bits>> ->
+      case prev == chain.tip {
+        True -> extend(chain, raw, block)
+        False -> consider(chain, raw, block, prev)
+      }
+    _ -> Error("truncated")
+  }
+}
+
+fn extend(chain: Chain, raw: BitArray, block: tx.ParsedBlock) -> Result(Chain, String) {
+  case connect(chain, block) {
+    Error(reason) -> Error(reason)
+    Ok(chain) -> Ok(remember(chain, raw, block))
+  }
+}
+
+fn consider(
+  chain: Chain,
+  raw: BitArray,
+  block: tx.ParsedBlock,
+  prev: BitArray,
+) -> Result(Chain, String) {
+  let digest = hash.hash256(block.header)
+  case on_active(chain, digest) {
+    True -> Ok(chain)
+    False ->
+      case path_from(chain, raw, prev) {
+        Error(reason) -> Error(reason)
+        Ok(#(ancestor, path)) -> {
+          let new_height = height_of(chain, ancestor) + list.length(path)
+          let old_height = chain.height
+          let old_branch = branch_raws(chain, ancestor)
+          case rollback_to(chain, ancestor) {
+            Error(reason) -> Error(reason)
+            Ok(base) ->
+              case connect_all(base, path) {
+                Error(reason) -> {
+                  let _ = connect_all(base, old_branch)
+                  Error(reason)
+                }
+                Ok(forked) ->
+                  case new_height > old_height {
+                    True -> Ok(forked)
+                    False -> {
+                      let assert Ok(back) = rollback_to(forked, ancestor)
+                      connect_all(back, old_branch)
+                    }
+                  }
+              }
+          }
+        }
+      }
+  }
+}
+
+fn connect_all(chain: Chain, raws: List(BitArray)) -> Result(Chain, String) {
+  case raws {
+    [] -> Ok(chain)
+    [raw, ..rest] ->
+      case tx.decode_block(raw) {
+        Error(reason) -> Error(reason)
+        Ok(block) ->
+          case extend(chain, raw, block) {
+            Error(reason) -> Error(reason)
+            Ok(chain) -> connect_all(chain, rest)
+          }
+      }
+  }
+}
+
+fn path_from(
+  chain: Chain,
+  raw: BitArray,
+  prev: BitArray,
+) -> Result(#(BitArray, List(BitArray)), String) {
+  case on_active(chain, prev) {
+    True -> Ok(#(prev, [raw]))
+    False ->
+      case dict.get(chain.blocks, hash.display(prev)) {
+        Error(_) -> Error("prev-blk-not-found")
+        Ok(known) ->
+          case path_from(chain, known.raw, known.prev) {
+            Error(reason) -> Error(reason)
+            Ok(#(ancestor, older)) -> Ok(#(ancestor, list.append(older, [raw])))
+          }
+      }
+  }
+}
+
+fn rollback_to(chain: Chain, ancestor: BitArray) -> Result(Chain, String) {
+  case chain.tip == ancestor {
+    True -> Ok(chain)
+    False ->
+      case disconnect_tip(chain) {
+        Error(reason) -> Error(reason)
+        Ok(chain) -> rollback_to(chain, ancestor)
+      }
+  }
+}
+
+fn branch_raws(chain: Chain, ancestor: BitArray) -> List(BitArray) {
+  collect_branch(chain, chain.tip, ancestor, [])
+}
+
+fn collect_branch(
+  chain: Chain,
+  cursor: BitArray,
+  ancestor: BitArray,
+  acc: List(BitArray),
+) -> List(BitArray) {
+  case cursor == ancestor {
+    True -> acc
+    False ->
+      case dict.get(chain.blocks, hash.display(cursor)) {
+        Error(_) -> acc
+        Ok(known) -> collect_branch(chain, known.prev, ancestor, [known.raw, ..acc])
+      }
+  }
+}
+
+fn on_active(chain: Chain, hash: BitArray) -> Bool {
+  hash == chain.tip || walk_active(chain, chain.tip, hash)
+}
+
+fn walk_active(chain: Chain, cursor: BitArray, target: BitArray) -> Bool {
+  case cursor == target {
+    True -> True
+    False ->
+      case dict.get(chain.blocks, hash.display(cursor)) {
+        Error(_) -> False
+        Ok(known) -> known.prev == target || walk_active(chain, known.prev, target)
+      }
+  }
+}
+
+fn height_of(chain: Chain, digest: BitArray) -> Int {
+  case digest == chain.tip {
+    True -> chain.height
+    False ->
+      case dict.get(chain.blocks, hash.display(digest)) {
+        Ok(known) -> known.height
+        Error(_) -> 0
+      }
+  }
+}
+
+fn remember(chain: Chain, raw: BitArray, block: tx.ParsedBlock) -> Chain {
+  let assert <<_:32-little, prev:bytes-size(32), _:bytes-size(32), _:32-little, _:32-little, _:32-little>> =
+    block.header
+  let digest = hash.hash256(block.header)
+  Chain(
+    ..chain,
+    blocks: dict.insert(
+      chain.blocks,
+      hash.display(digest),
+      Known(raw, prev, chain.height),
+    ),
+  )
 }
 
 fn connect(chain: Chain, block: tx.ParsedBlock) -> Result(Chain, String) {
@@ -206,6 +381,7 @@ fn spend(
                 times: list.append(chain.times, [time]),
                 coins: coins,
                 undos: [undo, ..chain.undos],
+                blocks: chain.blocks,
               ))
             }
           }
