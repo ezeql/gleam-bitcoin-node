@@ -49,6 +49,33 @@ pub fn relay_inv(pool: Pool) -> List(String) {
   pool.relay
 }
 
+pub type RelayOutput {
+  RelayOutput(txid: String, vout: Int, value: Int, script: BitArray)
+}
+
+pub fn relay_outputs(pool: Pool) -> #(List(RelayOutput), List(String)) {
+  let outputs =
+    list.flat_map(dict.to_list(pool.entries), fn(pair) {
+      let #(id, entry) = pair
+      output_rows(id, entry.tx.outputs, 0)
+    })
+  #(outputs, dict.keys(pool.spent))
+}
+
+fn output_rows(
+  txid: String,
+  outputs: List(tx.Output),
+  index: Int,
+) -> List(RelayOutput) {
+  case outputs {
+    [] -> []
+    [output, ..rest] -> [
+      RelayOutput(txid, index, output.value, output.script_pubkey),
+      ..output_rows(txid, rest, index + 1)
+    ]
+  }
+}
+
 pub fn well_formed(txs: List(tx.Tx)) -> Result(Nil, String) {
   let weight = list.fold(txs, 0, fn(sum, item) { sum + tx.weight(item) })
   case list.length(txs) > max_package_count {

@@ -3,16 +3,28 @@ import gleam/int
 import gleam/string
 
 @external(erlang, "gleam_bitcoin_node_ffi", "sha256")
-fn sha256(data: BitArray) -> BitArray
+fn sha256_raw(data: BitArray) -> BitArray
 
 @external(erlang, "gleam_bitcoin_node_ffi", "hex_encode")
 fn hex_encode(data: BitArray) -> String
+
+pub fn sha256(data: BitArray) -> BitArray {
+  sha256_raw(data)
+}
+
+pub fn encode_hex(data: BitArray) -> String {
+  hex_encode(data)
+}
+
+pub fn decode_hex(hex: String) -> Result(BitArray, Nil) {
+  hex_decode(hex)
+}
 
 @external(erlang, "gleam_bitcoin_node_ffi", "hex_decode")
 fn hex_decode(hex: String) -> Result(BitArray, Nil)
 
 pub fn hash256(data: BitArray) -> BitArray {
-  sha256(sha256(data))
+  sha256_raw(sha256_raw(data))
 }
 
 pub fn display(internal: BitArray) -> String {
