@@ -2,7 +2,8 @@ import gleam/int
 import gleam_bitcoin_node/hash
 import gleam_bitcoin_node/params
 
-const zero_hash = "0000000000000000000000000000000000000000000000000000000000000000"
+const zero_hash =
+  "0000000000000000000000000000000000000000000000000000000000000000"
 
 const p2sh = 1
 
@@ -16,7 +17,7 @@ const csv_flag = 1024
 
 const witness = 2048
 
-const taproot = 131072
+const taproot = 131_072
 
 @external(erlang, "gleam_bitcoin_node_kernel", "verify")
 fn verify_nif(
