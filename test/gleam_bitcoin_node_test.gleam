@@ -5,7 +5,9 @@ import gleam/string
 import gleam_bitcoin_node
 import gleam_bitcoin_node/codec
 import gleam_bitcoin_node/hash
+import gleam_bitcoin_node/merkle
 import gleam_bitcoin_node/params
+import gleam_bitcoin_node/tx
 import gleeunit
 import gleeunit/should
 
@@ -86,6 +88,147 @@ fn expect_common(
   p.testdummy.start_time |> should.equal(start)
   p.testdummy.timeout |> should.equal(9_223_372_036_854_775_807)
   p.testdummy.min_activation_height |> should.equal(0)
+}
+
+pub fn legacy_tx_roundtrip_test() {
+  let raw = <<
+    1:32-little,
+    1,
+    0:size(256),
+    0xffffffff:32-little,
+    1,
+    0x51,
+    0xfffffffe:32-little,
+    1,
+    1000:64-little,
+    1,
+    0x51,
+    7:32-little,
+  >>
+  let assert Ok(#(decoded, rest)) = tx.decode(raw)
+  bit_array.byte_size(rest) |> should.equal(0)
+  tx.encode(decoded) |> should.equal(raw)
+  decoded.locktime |> should.equal(7)
+  decoded.has_witness |> should.equal(False)
+  decoded.txid |> should.equal(decoded.wtxid)
+  tx.weight(decoded) |> should.equal(bit_array.byte_size(raw) * 4)
+}
+
+pub fn superfluous_witness_test() {
+  let raw = <<
+    2:32-little,
+    0,
+    1,
+    1,
+    0:size(256),
+    0xffffffff:32-little,
+    0,
+    0xffffffff:32-little,
+    1,
+    1:64-little,
+    0,
+    0,
+    0:32-little,
+  >>
+  tx.decode(raw) |> should.equal(Error("superfluous-witness"))
+}
+
+pub fn merkle_root_test() {
+  let hash = <<1:size(256)>>
+  let #(root, mutated) = merkle.compute_root([hash])
+  root |> should.equal(hash)
+  mutated |> should.equal(False)
+  let #(_, mutated) = merkle.compute_root([hash, hash])
+  mutated |> should.equal(True)
+  let #(zero, _) = merkle.compute_root([])
+  zero |> should.equal(<<0:size(256)>>)
+}
+
+pub fn real_tx_roundtrip_test() {
+  start_node("/tmp/btc-tx", "18447", "18448")
+  tx_cli("createwallet e2e")
+  let addr = tx_cli("getnewaddress")
+  addr |> should.not_equal("")
+  tx_cli("generatetoaddress 101 \"" <> addr <> "\"")
+  let sent = tx_cli("sendtoaddress \"" <> addr <> "\" 0.1")
+  sent |> should.not_equal("")
+  tx_cli("generatetoaddress 1 \"" <> addr <> "\"")
+
+  let tip = tx_cli("getbestblockhash")
+  let assert Ok(raw) = hex_decode(tx_cli("getblock " <> tip <> " 0"))
+  let assert Ok(block) = tx.decode_block(raw)
+  tx.encode_block(block) |> should.equal(raw)
+  list.length(block.txs) |> should.not_equal(1)
+
+  let #(root, mutated) = merkle.block_root(block.txs)
+  root |> should.equal(block.merkle)
+  mutated |> should.equal(False)
+
+  let assert [coinbase, ..] = block.txs
+  let assert [input, ..] = coinbase.inputs
+  let assert [nonce] = input.witness
+  let assert Ok(committed) = commitment(coinbase.outputs)
+  hash.hash256(<<merkle.witness_root(block.txs):bits, nonce:bits>>)
+  |> should.equal(committed)
+
+  list.each(block.txs, check_tx)
+}
+
+fn check_tx(t: tx.Tx) -> Nil {
+  let id = hash.display(t.txid)
+  let info = tx_cli("getrawtransaction " <> id <> " true")
+  json_string(info, "txid") |> should.equal(id)
+  json_field(info, "hash") |> should.equal(hash.display(t.wtxid))
+  json_int(info, "weight") |> should.equal(tx.weight(t))
+  json_int(info, "locktime") |> should.equal(t.locktime)
+  let assert Ok(raw_tx) = hex_decode(tx_cli("getrawtransaction " <> id))
+  t.raw |> should.equal(raw_tx)
+  tx.encode(t) |> should.equal(raw_tx)
+}
+
+fn commitment(outputs: List(tx.Output)) -> Result(BitArray, Nil) {
+  case outputs {
+    [] -> Error(Nil)
+    [output, ..rest] ->
+      case output.script_pubkey {
+        <<0x6a, 0x24, 0xaa, 0x21, 0xa9, 0xed, got:bytes-size(32), _:bits>> -> Ok(got)
+        _ -> commitment(rest)
+      }
+  }
+}
+
+fn json_string(json: String, key: String) -> String {
+  let assert Ok(#(_, rest)) = string.split_once(json, "\"" <> key <> "\": \"")
+  let assert Ok(#(value, _)) = string.split_once(rest, "\"")
+  value
+}
+
+fn json_field(json: String, key: String) -> String {
+  let assert Ok(#(_, rest)) = string.split_once(json, "\n  \"" <> key <> "\": \"")
+  let assert Ok(#(value, _)) = string.split_once(rest, "\"")
+  value
+}
+
+fn json_int(json: String, key: String) -> Int {
+  let assert Ok(#(_, rest)) = string.split_once(json, "\"" <> key <> "\": ")
+  take_int(rest, "")
+}
+
+fn take_int(rest: String, acc: String) -> Int {
+  case string.pop_grapheme(rest) {
+    Ok(#(digit, rest)) ->
+      case string.contains("0123456789", digit) {
+        True -> take_int(rest, acc <> digit)
+        False -> {
+          let assert Ok(n) = int.parse(acc)
+          n
+        }
+      }
+    Error(_) -> {
+      let assert Ok(n) = int.parse(acc)
+      n
+    }
+  }
 }
 
 pub fn regtest_tip_and_reject_test() {
@@ -197,6 +340,37 @@ fn netcli(flag: String, args: String) -> String {
   }
   cmd(
     "bitcoin-cli " <> prefix <> "-rpcuser=e2e -rpcpassword=e2e " <> args <> " 2>/dev/null",
+  )
+  |> string.trim
+}
+
+fn start_node(dir: String, rpc: String, p2p: String) -> Nil {
+  let _ = cmd("mkdir -p " <> dir)
+  let _ =
+    cmd(
+      "bitcoind -regtest -datadir="
+      <> dir
+      <> " -daemonwait -listen=0 -txindex=1 -fallbackfee=0.0002 -rpcuser=e2e -rpcpassword=e2e -rpcport="
+      <> rpc
+      <> " -port="
+      <> p2p,
+    )
+  Nil
+}
+
+fn tx_cli(args: String) -> String {
+  node_cli("/tmp/btc-tx", "18447", args)
+}
+
+fn node_cli(dir: String, rpc: String, args: String) -> String {
+  cmd(
+    "bitcoin-cli -regtest -datadir="
+    <> dir
+    <> " -rpcport="
+    <> rpc
+    <> " -rpcuser=e2e -rpcpassword=e2e "
+    <> args
+    <> " 2>&1",
   )
   |> string.trim
 }
