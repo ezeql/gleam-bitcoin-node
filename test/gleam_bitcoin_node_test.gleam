@@ -1,14 +1,17 @@
 import gleam/bit_array
+import gleam/dict
 import gleam/int
 import gleam/list
 import gleam/string
 import gleam_bitcoin_node
+import gleam_bitcoin_node/chain
 import gleam_bitcoin_node/codec
 import gleam_bitcoin_node/compact
 import gleam_bitcoin_node/consensus
 import gleam_bitcoin_node/hash
 import gleam_bitcoin_node/headers
 import gleam_bitcoin_node/kernel
+import gleam_bitcoin_node/mempool
 import gleam_bitcoin_node/merkle
 import gleam_bitcoin_node/p2p
 import gleam_bitcoin_node/params
@@ -628,6 +631,196 @@ pub fn block_download_test() {
   let assert Ok(cmpct) = p2p.fetch_cmpct("127.0.0.1", 18_474, tip)
   let assert Ok(rebuilt) = compact.reconstruct(cmpct)
   compact.header_hex(rebuilt) |> should.equal(tip)
+}
+
+pub fn package_shape_test() {
+  let input = tx.Input(<<1:size(256)>>, 0, <<>>, 0xffffffff, [])
+  let parent =
+    tx.Tx(
+      2,
+      [input],
+      [tx.Output(1, <<0x51>>)],
+      0,
+      <<>>,
+      <<9:size(256)>>,
+      <<9:size(256)>>,
+      False,
+      100,
+    )
+  let child =
+    tx.Tx(
+      2,
+      [tx.Input(<<9:size(256)>>, 0, <<>>, 0xffffffff, [])],
+      [tx.Output(1, <<0x51>>)],
+      0,
+      <<>>,
+      <<8:size(256)>>,
+      <<8:size(256)>>,
+      False,
+      100,
+    )
+  mempool.well_formed([child, parent])
+  |> should.equal(Error("package-not-sorted"))
+  let other =
+    tx.Tx(
+      2,
+      [input],
+      [tx.Output(1, <<0x51>>)],
+      0,
+      <<>>,
+      <<2:size(256)>>,
+      <<2:size(256)>>,
+      False,
+      100,
+    )
+  mempool.well_formed([parent, other])
+  |> should.equal(Error("conflict-in-package"))
+  mempool.well_formed([parent, child]) |> should.equal(Ok(Nil))
+}
+
+pub fn mempool_package_and_rbf_test() {
+  start_node("/tmp/btc-mempool", "18477", "18476")
+  mp_cli("createwallet e2e")
+  let change = mp_cli("-rpcwallet=e2e getnewaddress")
+  let sink = mp_cli("-rpcwallet=e2e getnewaddress")
+  mp_cli("-rpcwallet=e2e generatetoaddress 101 \"" <> change <> "\"")
+  let assert Ok(count) = int.parse(mp_cli("getblockcount"))
+  let chain =
+    range(1, count)
+    |> list.fold(gleam_bitcoin_node.new(), fn(chain, height) {
+      let assert Ok(chain) =
+        gleam_bitcoin_node.submit_block(chain, mp_block(height))
+      chain
+    })
+  gleam_bitcoin_node.tip_hex(chain) |> should.equal(mp_cli("getbestblockhash"))
+
+  let #(txid, vout, value) = mature_outpoint(chain)
+  value |> should.equal(5_000_000_000)
+  let parent_value = value - 100_000
+  let child_value = parent_value - 100_000
+  let parent_hex = sign_spend(txid, vout, change, parent_value, False, "")
+  let assert Ok(parent_raw) = hex_decode(parent_hex)
+  let assert Ok(#(parent, rest)) = tx.decode(parent_raw)
+  bit_array.byte_size(rest) |> should.equal(0)
+  let assert [output, ..] = parent.outputs
+  let child_hex =
+    sign_spend(
+      hash.display(parent.txid),
+      0,
+      sink,
+      child_value,
+      False,
+      prevout(hash.display(parent.txid), output.script_pubkey, parent_value),
+    )
+  let assert Ok(child_raw) = hex_decode(child_hex)
+  let core =
+    mp_cli(
+      "testmempoolaccept '[\"" <> parent_hex <> "\",\"" <> child_hex <> "\"]'",
+    )
+  string.contains(core, "\"allowed\": false") |> should.equal(False)
+  let assert Ok(verdicts) =
+    mempool.test_package(chain, mempool.new(), [parent_raw, child_raw])
+  list.length(verdicts) |> should.equal(2)
+  list.each(verdicts, fn(verdict) {
+    verdict.reason |> should.equal("")
+    verdict.allowed |> should.equal(True)
+    string.contains(core, verdict.txid) |> should.equal(True)
+  })
+
+  let tx1 = sign_spend(txid, vout, sink, value - 10_000, True, "")
+  let assert Ok(tx1_raw) = hex_decode(tx1)
+  let sent = mp_cli("sendrawtransaction " <> tx1)
+  let assert Ok(#(pool, id)) = mempool.send_raw(chain, mempool.new(), tx1_raw)
+  id |> should.equal(sent)
+  mempool.relay_inv(pool) |> should.equal([id])
+
+  let tx2 = sign_spend(txid, vout, sink, value - 9000, True, "")
+  let assert Ok(tx2_raw) = hex_decode(tx2)
+  let rejected = mp_cli("sendrawtransaction " <> tx2)
+  string.contains(rejected, "insufficient fee") |> should.equal(True)
+  let assert Error(reason) = mempool.send_raw(chain, pool, tx2_raw)
+  reason |> should.equal("insufficient fee")
+  string.contains(rejected, reason) |> should.equal(True)
+  mempool.relay_inv(pool) |> should.equal([id])
+}
+
+fn mature_outpoint(chain: chain.Chain) -> #(String, Int, Int) {
+  let limit = chain.height - 100
+  let assert Ok(#(key, coin)) =
+    list.find(dict.to_list(chain.coins), fn(pair) {
+      let #(_, coin) = pair
+      coin.coinbase && coin.height > 0 && coin.height <= limit
+    })
+  let assert Ok(#(txid, vout)) = string.split_once(key, ":")
+  let assert Ok(index) = int.parse(vout)
+  #(txid, index, coin.value)
+}
+
+fn sign_spend(
+  txid: String,
+  vout: Int,
+  addr: String,
+  sats: Int,
+  replaceable: Bool,
+  prev: String,
+) -> String {
+  let flag = case replaceable {
+    True -> " true"
+    False -> " false"
+  }
+  let raw =
+    mp_cli(
+      "createrawtransaction '[{\"txid\":\""
+      <> txid
+      <> "\",\"vout\":"
+      <> int.to_string(vout)
+      <> "}]' '{\""
+      <> addr
+      <> "\":"
+      <> btc(sats)
+      <> "}' 0"
+      <> flag,
+    )
+  let args = case prev {
+    "" -> raw
+    _ -> raw <> " '" <> prev <> "'"
+  }
+  let signed = mp_cli("-rpcwallet=e2e signrawtransactionwithwallet " <> args)
+  string.contains(signed, "\"complete\": true") |> should.equal(True)
+  json_string(signed, "hex")
+}
+
+fn prevout(txid: String, script: BitArray, sats: Int) -> String {
+  "[{\"txid\":\""
+  <> txid
+  <> "\",\"vout\":0,\"scriptPubKey\":\""
+  <> hex_encode(script)
+  <> "\",\"amount\":"
+  <> btc(sats)
+  <> "}]"
+}
+
+fn btc(sats: Int) -> String {
+  let whole = sats / 100_000_000
+  let frac = sats % 100_000_000
+  int.to_string(whole) <> "." <> pad_sats(int.to_string(frac))
+}
+
+fn pad_sats(text: String) -> String {
+  string.repeat("0", 8 - string.length(text)) <> text
+}
+
+fn mp_block(height: Int) -> BitArray {
+  let hex =
+    mp_cli(
+      "getblock " <> mp_cli("getblockhash " <> int.to_string(height)) <> " 0",
+    )
+  let assert Ok(raw) = hex_decode(hex)
+  raw
+}
+
+fn mp_cli(args: String) -> String {
+  node_cli("/tmp/btc-mempool", "18477", args)
 }
 
 fn bdl_count() -> Int {
