@@ -6,6 +6,7 @@ import gleam_bitcoin_node/codec
 import gleam_bitcoin_node/consensus
 import gleam_bitcoin_node/hash
 import gleam_bitcoin_node/headers
+import gleam_bitcoin_node/kernel
 import gleam_bitcoin_node/merkle
 import gleam_bitcoin_node/pow
 import gleam_bitcoin_node/script
@@ -147,19 +148,25 @@ fn spend(
   prev_mtp: Int,
 ) -> Result(Chain, String) {
   let view = View(base: chain.coins, extra: [], spent: [])
-  case connect_txs(view, block.txs, chain.times, height, prev_mtp, 0, 0) {
+  case connect_txs(view, block.txs, chain.times, height, prev_mtp, 0, 0, []) {
     Error(reason) -> Error(reason)
-    Ok(#(view, fees, _)) -> {
+    Ok(#(view, fees, _, jobs)) -> {
       let assert [coinbase, ..] = block.txs
       case consensus.output_sum(coinbase.outputs) > fees + codec.subsidy(height) {
         True -> Error("bad-cb-amount")
         False ->
-          Ok(Chain(
-            height: height,
-            tip: hash.hash256(block.header),
-            times: list.append(chain.times, [time]),
-            coins: materialize(view),
-          ))
+          case
+            kernel.verify_jobs(jobs, height, hash.hash256(block.header))
+          {
+            Error(_) -> Error("block-script-verify-flag-failed")
+            Ok(_) ->
+              Ok(Chain(
+                height: height,
+                tip: hash.hash256(block.header),
+                times: list.append(chain.times, [time]),
+                coins: materialize(view),
+              ))
+          }
       }
     }
   }
@@ -173,9 +180,10 @@ fn connect_txs(
   prev_mtp: Int,
   fees: Int,
   sigops: Int,
-) -> Result(#(View, Int, Int), String) {
+  jobs: List(#(BitArray, List(#(BitArray, Int)))),
+) -> Result(#(View, Int, Int, List(#(BitArray, List(#(BitArray, Int))))), String) {
   case txs {
-    [] -> Ok(#(view, fees, sigops))
+    [] -> Ok(#(view, fees, sigops, list.reverse(jobs)))
     [tx, ..rest] -> {
       let coinbase = consensus.is_coinbase(tx)
       case load_inputs(view, tx, coinbase) {
@@ -210,6 +218,10 @@ fn connect_txs(
                             prev_mtp,
                             fees,
                             sigops,
+                            case coinbase {
+                              True -> jobs
+                              False -> [script_job(tx, coins), ..jobs]
+                            },
                           )
                       }
                     }
@@ -220,6 +232,13 @@ fn connect_txs(
       }
     }
   }
+}
+
+fn script_job(
+  tx: tx.Tx,
+  coins: List(consensus.Coin),
+) -> #(BitArray, List(#(BitArray, Int))) {
+  #(tx.raw, list.map(coins, fn(coin) { #(coin.script, coin.value) }))
 }
 
 fn merkle_ok(txs: List(tx.Tx), merkle: BitArray) -> Result(Nil, String) {

@@ -7,6 +7,7 @@ import gleam_bitcoin_node/codec
 import gleam_bitcoin_node/consensus
 import gleam_bitcoin_node/hash
 import gleam_bitcoin_node/headers
+import gleam_bitcoin_node/kernel
 import gleam_bitcoin_node/pow
 import gleam_bitcoin_node/merkle
 import gleam_bitcoin_node/params
@@ -336,6 +337,102 @@ pub fn sigop_and_lock_test() {
   |> should.equal(True)
   consensus.sequence_ok(bare_tx(2, 0x8000000a, 0), [coin], True, 14, 0, fn(_height) { 0 })
   |> should.equal(True)
+}
+
+pub fn script_flags_test() {
+  let height_one = kernel.block_flags(1)
+  let height_zero = kernel.block_flags(0)
+  int.bitwise_and(height_one, 4) |> should.equal(4)
+  int.bitwise_and(height_zero, 4) |> should.equal(0)
+  let assert Ok(hash) = hash.from_display("11")
+  kernel.assume_valid_covers(hash, "22") |> should.equal(False)
+  kernel.assume_valid_covers(hash, string.repeat("0", 64)) |> should.equal(False)
+  kernel.assume_valid_covers(hash, hash.display(hash)) |> should.equal(True)
+}
+
+pub fn script_spend_test() {
+  start_node("/tmp/btc-script", "18451", "18452")
+  script_cli("createwallet e2e")
+  let addr = script_cli("getnewaddress")
+  script_cli("generatetoaddress 101 \"" <> addr <> "\"")
+  let sent = script_cli("sendtoaddress \"" <> addr <> "\" 1")
+  sent |> should.not_equal("")
+  script_cli("generatetoaddress 1 \"" <> addr <> "\"")
+  let count = {
+    let assert Ok(n) = int.parse(script_cli("getblockcount"))
+    n
+  }
+  let before =
+    range(1, count - 1)
+    |> list.fold(gleam_bitcoin_node.new(), fn(chain, height) {
+      let assert Ok(chain) = gleam_bitcoin_node.submit_block(chain, script_block(height))
+      chain
+    })
+  let last = script_block(count)
+  let assert Ok(chain) = gleam_bitcoin_node.submit_block(before, last)
+  gleam_bitcoin_node.tip_hex(chain) |> should.equal(script_cli("getbestblockhash"))
+
+  let parent = gleam_bitcoin_node.tip_hex(before)
+  let bad = break_script(last)
+  let assert Error("block-script-verify-flag-failed") =
+    gleam_bitcoin_node.submit_block(before, bad)
+  gleam_bitcoin_node.tip_hex(before) |> should.equal(parent)
+  gleam_bitcoin_node.tip_hex(chain) |> should.equal(script_cli("getbestblockhash"))
+}
+
+fn script_block(height: Int) -> BitArray {
+  let hex =
+    script_cli(
+      "getblock " <> script_cli("getblockhash " <> int.to_string(height)) <> " 0",
+    )
+  let assert Ok(raw) = hex_decode(hex)
+  raw
+}
+
+fn script_cli(args: String) -> String {
+  node_cli("/tmp/btc-script", "18451", args)
+}
+
+fn break_script(raw: BitArray) -> BitArray {
+  let assert Ok(block) = tx.decode_block(raw)
+  let assert [coin, spend, ..rest] = block.txs
+  let assert [input, ..inputs] = spend.inputs
+  let spend = reparse(tx.Tx(..spend, inputs: [corrupt_input(input), ..inputs]))
+  let txs = [coin, spend, ..rest]
+  let assert [coin_input, ..] = coin.inputs
+  let assert [nonce] = coin_input.witness
+  let root = merkle.witness_root(txs)
+  let expect = hash.hash256(<<root:bits, nonce:bits>>)
+  let outputs = list.map(coin.outputs, fn(output) { patch_commitment(output, expect) })
+  let coin = reparse(tx.Tx(..coin, outputs: outputs))
+  let txs = [coin, spend, ..rest]
+  let #(merkle, _) = merkle.block_root(txs)
+  regrind(tx.encode_block(tx.ParsedBlock(block.header, merkle, txs)), merkle)
+}
+
+fn corrupt_input(input: tx.Input) -> tx.Input {
+  case input.witness {
+    [first, ..rest] -> tx.Input(..input, witness: [flip_last(first), ..rest])
+    _ -> tx.Input(..input, script_sig: flip_last(input.script_sig))
+  }
+}
+
+fn flip_last(bytes: BitArray) -> BitArray {
+  let size = bit_array.byte_size(bytes)
+  let assert Ok(head) = bit_array.slice(bytes, 0, size - 1)
+  let assert Ok(<<last>>) = bit_array.slice(bytes, size - 1, 1)
+  <<head:bits, { int.bitwise_exclusive_or(last, 1) }>>
+}
+
+fn patch_commitment(output: tx.Output, expect: BitArray) -> tx.Output {
+  case output.script_pubkey {
+    <<0x6a, 0x24, 0xaa, 0x21, 0xa9, 0xed, _:bytes-size(32), tail:bits>> ->
+      tx.Output(
+        output.value,
+        <<0x6a, 0x24, 0xaa, 0x21, 0xa9, 0xed, expect:bits, tail:bits>>,
+      )
+    _ -> output
+  }
 }
 
 fn bare_tx(version: Int, sequence: Int, locktime: Int) -> tx.Tx {
