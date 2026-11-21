@@ -2,6 +2,7 @@ import gleam/bit_array
 import gleam/dict
 import gleam/int
 import gleam/list
+import gleam/string
 import gleam_bitcoin_node/codec
 import gleam_bitcoin_node/consensus
 import gleam_bitcoin_node/hash
@@ -11,6 +12,20 @@ import gleam_bitcoin_node/merkle
 import gleam_bitcoin_node/pow
 import gleam_bitcoin_node/script
 import gleam_bitcoin_node/tx
+import gleam_bitcoin_node/utxo
+
+@external(erlang, "gleam_bitcoin_node_ffi", "append")
+fn append_file(path: String, data: BitArray) -> Nil
+
+const outputs_path = "/tmp/gleam-archive/outputs.seg"
+
+const inputs_path = "/tmp/gleam-archive/inputs.seg"
+
+const witness_path = "/tmp/gleam-archive/witness.seg"
+
+pub type Undo {
+  Undo(prev: BitArray, spent: List(#(String, consensus.Coin)), created: List(String))
+}
 
 pub type Chain {
   Chain(
@@ -18,6 +33,7 @@ pub type Chain {
     tip: BitArray,
     times: List(Int),
     coins: dict.Dict(String, consensus.Coin),
+    undos: List(Undo),
   )
 }
 
@@ -39,11 +55,32 @@ type View {
 
 pub fn new() -> Chain {
   let genesis = headers.regtest_genesis_entry()
-  Chain(height: 0, tip: genesis.hash, times: [genesis.time], coins: dict.new())
+  Chain(height: 0, tip: genesis.hash, times: [genesis.time], coins: dict.new(), undos: [])
 }
 
 pub fn tip_hex(chain: Chain) -> String {
   hash.display(chain.tip)
+}
+
+pub fn utxo_stats(chain: Chain) -> utxo.Stats {
+  utxo.stats(chain.coins)
+}
+
+pub fn disconnect_tip(chain: Chain) -> Result(Chain, String) {
+  case chain.undos {
+    [] -> Error("no-tip")
+    [undo, ..rest] -> {
+      let coins = delete_keys(chain.coins, undo.created)
+      let coins = restore(coins, undo.spent)
+      Ok(Chain(
+        height: chain.height - 1,
+        tip: undo.prev,
+        times: drop_last(chain.times),
+        coins: coins,
+        undos: rest,
+      ))
+    }
+  }
 }
 
 pub fn submit_block(chain: Chain, raw: BitArray) -> Result(Chain, String) {
@@ -159,13 +196,18 @@ fn spend(
             kernel.verify_jobs(jobs, height, hash.hash256(block.header))
           {
             Error(_) -> Error("block-script-verify-flag-failed")
-            Ok(_) ->
+            Ok(_) -> {
+              let coins = materialize(view)
+              let undo = Undo(chain.tip, spent_pairs(view), created_keys(view.extra))
+              store_block(height, block.txs, undo)
               Ok(Chain(
                 height: height,
                 tip: hash.hash256(block.header),
                 times: list.append(chain.times, [time]),
-                coins: materialize(view),
+                coins: coins,
+                undos: [undo, ..chain.undos],
               ))
+            }
           }
       }
     }
@@ -232,6 +274,91 @@ fn connect_txs(
       }
     }
   }
+}
+
+fn spent_pairs(view: View) -> List(#(String, consensus.Coin)) {
+  list.filter_map(view.spent, fn(key) {
+    case dict.get(view.base, key) {
+      Ok(coin) -> Ok(#(key, coin))
+      Error(_) -> Error(Nil)
+    }
+  })
+}
+
+fn created_keys(extra: List(#(String, consensus.Coin))) -> List(String) {
+  list.map(extra, fn(pair) {
+    let #(key, _) = pair
+    key
+  })
+}
+
+fn delete_keys(
+  coins: dict.Dict(String, consensus.Coin),
+  keys: List(String),
+) -> dict.Dict(String, consensus.Coin) {
+  list.fold(keys, coins, fn(acc, key) { dict.delete(acc, key) })
+}
+
+fn restore(
+  coins: dict.Dict(String, consensus.Coin),
+  spent: List(#(String, consensus.Coin)),
+) -> dict.Dict(String, consensus.Coin) {
+  list.fold(spent, coins, fn(acc, pair) {
+    let #(key, coin) = pair
+    dict.insert(acc, key, coin)
+  })
+}
+
+fn drop_last(times: List(Int)) -> List(Int) {
+  case list.length(times) {
+    0 -> []
+    n -> list.take(times, n - 1)
+  }
+}
+
+fn store_block(height: Int, txs: List(tx.Tx), undo: Undo) -> Nil {
+  append_file(outputs_path, output_records(height, undo.created))
+  append_file(inputs_path, input_records(height, undo.spent))
+  append_file(witness_path, witness_records(height, txs))
+}
+
+fn output_records(height: Int, created: List(String)) -> BitArray {
+  list.fold(created, <<>>, fn(acc, key) {
+    let #(txid, vout) = key_parts(key)
+    <<acc:bits, 1, height:32-little, txid:bits, vout:32-little>>
+  })
+}
+
+fn input_records(height: Int, spent: List(#(String, consensus.Coin))) -> BitArray {
+  list.fold(spent, <<>>, fn(acc, pair) {
+    let #(key, _) = pair
+    let #(txid, vout) = key_parts(key)
+    <<acc:bits, 2, height:32-little, txid:bits, vout:32-little>>
+  })
+}
+
+fn witness_records(height: Int, txs: List(tx.Tx)) -> BitArray {
+  list.fold(txs, <<>>, fn(acc, tx) {
+    list.fold(tx.inputs, acc, fn(acc, input) {
+      case input.witness {
+        [] -> acc
+        stack -> <<acc:bits, 3, height:32-little, tx.txid:bits, stack_bytes(stack):bits>>
+      }
+    })
+  })
+}
+
+fn stack_bytes(stack: List(BitArray)) -> BitArray {
+  list.fold(stack, <<list.length(stack)>>, fn(acc, item) {
+    <<acc:bits, bit_array.byte_size(item), item:bits>>
+  })
+}
+
+fn key_parts(key: String) -> #(BitArray, Int) {
+  let txid_hex = string.slice(key, 0, 64)
+  let assert Ok(vout) = int.parse(string.drop_start(key, 65))
+  let assert Ok(txid) = hash.from_display(txid_hex)
+  #(txid, vout)
 }
 
 fn script_job(
