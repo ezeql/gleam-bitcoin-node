@@ -9,10 +9,10 @@ import gleam_bitcoin_node/consensus
 import gleam_bitcoin_node/hash
 import gleam_bitcoin_node/headers
 import gleam_bitcoin_node/kernel
-import gleam_bitcoin_node/pow
 import gleam_bitcoin_node/merkle
 import gleam_bitcoin_node/p2p
 import gleam_bitcoin_node/params
+import gleam_bitcoin_node/pow
 import gleam_bitcoin_node/script
 import gleam_bitcoin_node/tx
 import gleeunit
@@ -41,11 +41,86 @@ pub fn core_genesis_hashes_test() {
 
 pub fn core_chain_params_test() {
   let zero = string.repeat("0", 64)
-  expect_common(params.mainnet(), <<0xf9, 0xbe, 0xb4, 0xd9>>, 8333, 227_931, 388_381, 363_725, 419_328, 481_824, "000000000000024b89b42a942fe0d9fea3bb44ab7bd1b19115dd6a759c0808b8", "000000000000000000000000000000000000000145ec036acc5ba740052af1a0", "00000000000000000000748969ec33043c0e52a763c6dd5193861f559f2c72e3", 1815, 2016, -2)
-  expect_common(params.testnet(), <<0x0b, 0x11, 0x09, 0x07>>, 18_333, 21_111, 581_885, 330_776, 770_112, 834_624, "0000000023b3a96d3484e5abb3755c413e7d41500f8e2a5c3f0dd01299cd8ef8", "0000000000000000000000000000000000000000000017f49f702147f10c0eb6", "00000000b318a3703d14a844c55ef507f4c2fc8f8766e24271fd43c180c51637", 1512, 2016, -2)
-  expect_common(params.testnet4(), <<0x1c, 0x16, 0x3f, 0x28>>, 48_333, 1, 1, 1, 1, 1, zero, "000000000000000000000000000000000000000000000e346a558455ade8eca9", "0000000021df65b91665a342e26ceb05e54826ad7d8fcd40316230058fa3b865", 1512, 2016, -2)
-  expect_common(params.signet(), <<0x0a, 0x03, 0xcf, 0x40>>, 38_333, 1, 1, 1, 1, 1, zero, "00000000000000000000000000000000000000000000000000001090e9dc1520", "00000002a5e0ba0498f1e9f4591af0b66b63c654665efe65206fd0ae7bbaf923", 1815, 2016, -2)
-  expect_common(params.regtest(), <<0xfa, 0xbf, 0xb5, 0xda>>, 18_444, 1, 1, 1, 1, 0, zero, zero, zero, 108, 144, 0)
+  expect_common(
+    params.mainnet(),
+    <<0xf9, 0xbe, 0xb4, 0xd9>>,
+    8333,
+    227_931,
+    388_381,
+    363_725,
+    419_328,
+    481_824,
+    "000000000000024b89b42a942fe0d9fea3bb44ab7bd1b19115dd6a759c0808b8",
+    "000000000000000000000000000000000000000145ec036acc5ba740052af1a0",
+    "00000000000000000000748969ec33043c0e52a763c6dd5193861f559f2c72e3",
+    1815,
+    2016,
+    -2,
+  )
+  expect_common(
+    params.testnet(),
+    <<0x0b, 0x11, 0x09, 0x07>>,
+    18_333,
+    21_111,
+    581_885,
+    330_776,
+    770_112,
+    834_624,
+    "0000000023b3a96d3484e5abb3755c413e7d41500f8e2a5c3f0dd01299cd8ef8",
+    "0000000000000000000000000000000000000000000017f49f702147f10c0eb6",
+    "00000000b318a3703d14a844c55ef507f4c2fc8f8766e24271fd43c180c51637",
+    1512,
+    2016,
+    -2,
+  )
+  expect_common(
+    params.testnet4(),
+    <<0x1c, 0x16, 0x3f, 0x28>>,
+    48_333,
+    1,
+    1,
+    1,
+    1,
+    1,
+    zero,
+    "000000000000000000000000000000000000000000000e346a558455ade8eca9",
+    "0000000021df65b91665a342e26ceb05e54826ad7d8fcd40316230058fa3b865",
+    1512,
+    2016,
+    -2,
+  )
+  expect_common(
+    params.signet(),
+    <<0x0a, 0x03, 0xcf, 0x40>>,
+    38_333,
+    1,
+    1,
+    1,
+    1,
+    1,
+    zero,
+    "00000000000000000000000000000000000000000000000000001090e9dc1520",
+    "00000002a5e0ba0498f1e9f4591af0b66b63c654665efe65206fd0ae7bbaf923",
+    1815,
+    2016,
+    -2,
+  )
+  expect_common(
+    params.regtest(),
+    <<0xfa, 0xbf, 0xb5, 0xda>>,
+    18_444,
+    1,
+    1,
+    1,
+    1,
+    0,
+    zero,
+    zero,
+    zero,
+    108,
+    144,
+    0,
+  )
 
   params.mainnet().signet_blocks |> should.equal(False)
   params.testnet().signet_blocks |> should.equal(False)
@@ -201,7 +276,8 @@ fn commitment(outputs: List(tx.Output)) -> Result(BitArray, Nil) {
     [] -> Error(Nil)
     [output, ..rest] ->
       case output.script_pubkey {
-        <<0x6a, 0x24, 0xaa, 0x21, 0xa9, 0xed, got:bytes-size(32), _:bits>> -> Ok(got)
+        <<0x6a, 0x24, 0xaa, 0x21, 0xa9, 0xed, got:bytes-size(32), _:bits>> ->
+          Ok(got)
         _ -> commitment(rest)
       }
   }
@@ -214,7 +290,8 @@ fn json_string(json: String, key: String) -> String {
 }
 
 fn json_field(json: String, key: String) -> String {
-  let assert Ok(#(_, rest)) = string.split_once(json, "\n  \"" <> key <> "\": \"")
+  let assert Ok(#(_, rest)) =
+    string.split_once(json, "\n  \"" <> key <> "\": \"")
   let assert Ok(#(value, _)) = string.split_once(rest, "\"")
   value
 }
@@ -252,7 +329,8 @@ pub fn regtest_tip_and_reject_test() {
 
   let assert Ok(raw) = hex_decode(block_hex(hashes))
   let bad_merkle = regrind(raw, <<0:size(256)>>)
-  let assert Error("bad-txnmrklroot") = gleam_bitcoin_node.submit_block(chain, bad_merkle)
+  let assert Error("bad-txnmrklroot") =
+    gleam_bitcoin_node.submit_block(chain, bad_merkle)
   gleam_bitcoin_node.tip_hex(chain) |> should.equal(parent)
 
   let bad_amount = bump_subsidy(raw)
@@ -307,16 +385,18 @@ fn break_height(coin: tx.Tx) -> tx.Tx {
   let assert [input, ..inputs] = coin.inputs
   let size = bit_array.byte_size(input.script_sig)
   let assert Ok(rest) = bit_array.slice(input.script_sig, 2, size - 2)
-  tx.Tx(..coin, inputs: [tx.Input(..input, script_sig: <<1, 99, rest:bits>>), ..inputs])
+  tx.Tx(..coin, inputs: [
+    tx.Input(..input, script_sig: <<1, 99, rest:bits>>),
+    ..inputs
+  ])
 }
 
 fn break_final(coin: tx.Tx) -> tx.Tx {
   let assert [input, ..inputs] = coin.inputs
-  tx.Tx(
-    ..coin,
-    locktime: 0xfffffffe,
-    inputs: [tx.Input(..input, sequence: 0), ..inputs],
-  )
+  tx.Tx(..coin, locktime: 0xfffffffe, inputs: [
+    tx.Input(..input, sequence: 0),
+    ..inputs
+  ])
 }
 
 pub fn sigop_and_lock_test() {
@@ -337,7 +417,14 @@ pub fn sigop_and_lock_test() {
   |> should.equal(True)
   consensus.sequence_ok(locked, [coin], False, 14, 0, fn(_height) { 0 })
   |> should.equal(True)
-  consensus.sequence_ok(bare_tx(2, 0x8000000a, 0), [coin], True, 14, 0, fn(_height) { 0 })
+  consensus.sequence_ok(
+    bare_tx(2, 0x8000000a, 0),
+    [coin],
+    True,
+    14,
+    0,
+    fn(_height) { 0 },
+  )
   |> should.equal(True)
 }
 
@@ -348,7 +435,8 @@ pub fn script_flags_test() {
   int.bitwise_and(height_zero, 4) |> should.equal(0)
   let assert Ok(hash) = hash.from_display("11")
   kernel.assume_valid_covers(hash, "22") |> should.equal(False)
-  kernel.assume_valid_covers(hash, string.repeat("0", 64)) |> should.equal(False)
+  kernel.assume_valid_covers(hash, string.repeat("0", 64))
+  |> should.equal(False)
   kernel.assume_valid_covers(hash, hash.display(hash)) |> should.equal(True)
 }
 
@@ -367,19 +455,22 @@ pub fn script_spend_test() {
   let before =
     range(1, count - 1)
     |> list.fold(gleam_bitcoin_node.new(), fn(chain, height) {
-      let assert Ok(chain) = gleam_bitcoin_node.submit_block(chain, script_block(height))
+      let assert Ok(chain) =
+        gleam_bitcoin_node.submit_block(chain, script_block(height))
       chain
     })
   let last = script_block(count)
   let assert Ok(chain) = gleam_bitcoin_node.submit_block(before, last)
-  gleam_bitcoin_node.tip_hex(chain) |> should.equal(script_cli("getbestblockhash"))
+  gleam_bitcoin_node.tip_hex(chain)
+  |> should.equal(script_cli("getbestblockhash"))
 
   let parent = gleam_bitcoin_node.tip_hex(before)
   let bad = break_script(last)
   let assert Error("block-script-verify-flag-failed") =
     gleam_bitcoin_node.submit_block(before, bad)
   gleam_bitcoin_node.tip_hex(before) |> should.equal(parent)
-  gleam_bitcoin_node.tip_hex(chain) |> should.equal(script_cli("getbestblockhash"))
+  gleam_bitcoin_node.tip_hex(chain)
+  |> should.equal(script_cli("getbestblockhash"))
 }
 
 pub fn utxo_set_test() {
@@ -394,7 +485,8 @@ pub fn utxo_set_test() {
   let assert Ok(chain) = gleam_bitcoin_node.disconnect_tip(chain)
   let chain = submit_utxo(chain, utxo_mine(2))
   expect_utxo(chain)
-  gleam_bitcoin_node.tip_hex(chain) |> should.equal(utxo_cli("getbestblockhash"))
+  gleam_bitcoin_node.tip_hex(chain)
+  |> should.equal(utxo_cli("getbestblockhash"))
 }
 
 fn expect_utxo(chain) -> Nil {
@@ -454,7 +546,8 @@ pub fn reorg_test() {
   gleam_bitcoin_node.utxo_stats(chain).hash |> should.equal(before)
 
   let chain = submit_reorg(chain, alt)
-  gleam_bitcoin_node.tip_hex(chain) |> should.equal(reorg_cli("getbestblockhash"))
+  gleam_bitcoin_node.tip_hex(chain)
+  |> should.equal(reorg_cli("getbestblockhash"))
 }
 
 fn submit_reorg(chain, hashes: List(String)) {
@@ -482,11 +575,13 @@ fn reorg_cli(args: String) -> String {
 
 pub fn p2p_handshake_test() {
   start_node_listen("/tmp/btc-p2p", "18471", "18470")
-  let assert Ok(Nil) = p2p.handshake_v1("127.0.0.1", 18470)
-  let assert Ok(Nil) = p2p.handshake_v2("127.0.0.1", 18470)
+  let assert Ok(Nil) = p2p.handshake_v1("127.0.0.1", 18_470)
+  let assert Ok(Nil) = p2p.handshake_v2("127.0.0.1", 18_470)
   let info = p2p_cli("getpeerinfo")
-  string.contains(info, "\"transport_protocol_type\": \"v1\"") |> should.equal(True)
-  string.contains(info, "\"transport_protocol_type\": \"v2\"") |> should.equal(True)
+  string.contains(info, "\"transport_protocol_type\": \"v1\"")
+  |> should.equal(True)
+  string.contains(info, "\"transport_protocol_type\": \"v2\"")
+  |> should.equal(True)
   p2p.addrman_count() |> should.equal(2)
 }
 
@@ -496,16 +591,22 @@ pub fn header_sync_test() {
   let addr = hsync_cli("getnewaddress")
   let _ = hsync_cli("generatetoaddress 5 \"" <> addr <> "\"")
   let assert 5 = hsync_count()
-  let assert Ok(raws) = p2p.sync_headers("127.0.0.1", 18472)
+  let assert Ok(raws) = p2p.sync_headers("127.0.0.1", 18_472)
   list.length(raws) |> should.equal(5)
   let assert Ok(chain) = headers.ingest(headers.regtest(), raws, unix_now())
   headers.tip_hex(chain) |> should.equal(hsync_cli("getbestblockhash"))
 }
 
 pub fn presync_work_test() {
-  headers.reached_minimum(headers.regtest(), params.regtest().minimum_chain_work)
+  headers.reached_minimum(
+    headers.regtest(),
+    params.regtest().minimum_chain_work,
+  )
   |> should.equal(True)
-  headers.reached_minimum(headers.regtest(), params.mainnet().minimum_chain_work)
+  headers.reached_minimum(
+    headers.regtest(),
+    params.mainnet().minimum_chain_work,
+  )
   |> should.equal(False)
 }
 
@@ -515,7 +616,7 @@ pub fn block_download_test() {
   let addr = bdl_cli("getnewaddress")
   let _ = bdl_cli("generatetoaddress 20 \"" <> addr <> "\"")
   let assert 20 = bdl_count()
-  let assert Ok(blocks) = p2p.download_blocks("127.0.0.1", 18474)
+  let assert Ok(blocks) = p2p.download_blocks("127.0.0.1", 18_474)
   list.length(blocks) |> should.equal(20)
   let chain =
     list.fold(blocks, gleam_bitcoin_node.new(), fn(chain, raw) {
@@ -524,7 +625,7 @@ pub fn block_download_test() {
     })
   let tip = bdl_cli("getbestblockhash")
   gleam_bitcoin_node.tip_hex(chain) |> should.equal(tip)
-  let assert Ok(cmpct) = p2p.fetch_cmpct("127.0.0.1", 18474, tip)
+  let assert Ok(cmpct) = p2p.fetch_cmpct("127.0.0.1", 18_474, tip)
   let assert Ok(rebuilt) = compact.reconstruct(cmpct)
   compact.header_hex(rebuilt) |> should.equal(tip)
 }
@@ -585,7 +686,9 @@ fn p2p_cli(args: String) -> String {
 fn script_block(height: Int) -> BitArray {
   let hex =
     script_cli(
-      "getblock " <> script_cli("getblockhash " <> int.to_string(height)) <> " 0",
+      "getblock "
+      <> script_cli("getblockhash " <> int.to_string(height))
+      <> " 0",
     )
   let assert Ok(raw) = hex_decode(hex)
   raw
@@ -605,7 +708,8 @@ fn break_script(raw: BitArray) -> BitArray {
   let assert [nonce] = coin_input.witness
   let root = merkle.witness_root(txs)
   let expect = hash.hash256(<<root:bits, nonce:bits>>)
-  let outputs = list.map(coin.outputs, fn(output) { patch_commitment(output, expect) })
+  let outputs =
+    list.map(coin.outputs, fn(output) { patch_commitment(output, expect) })
   let coin = reparse(tx.Tx(..coin, outputs: outputs))
   let txs = [coin, spend, ..rest]
   let #(merkle, _) = merkle.block_root(txs)
@@ -629,10 +733,16 @@ fn flip_last(bytes: BitArray) -> BitArray {
 fn patch_commitment(output: tx.Output, expect: BitArray) -> tx.Output {
   case output.script_pubkey {
     <<0x6a, 0x24, 0xaa, 0x21, 0xa9, 0xed, _:bytes-size(32), tail:bits>> ->
-      tx.Output(
-        output.value,
-        <<0x6a, 0x24, 0xaa, 0x21, 0xa9, 0xed, expect:bits, tail:bits>>,
-      )
+      tx.Output(output.value, <<
+        0x6a,
+        0x24,
+        0xaa,
+        0x21,
+        0xa9,
+        0xed,
+        expect:bits,
+        tail:bits,
+      >>)
     _ -> output
   }
 }
@@ -713,7 +823,8 @@ fn regrind(raw: BitArray, merkle: BitArray) -> BitArray {
   let assert Ok(after) = bit_array.slice(raw, 68, bit_array.byte_size(raw) - 68)
   let joined = <<before:bits, merkle:bits, after:bits>>
   let assert Ok(prefix) = bit_array.slice(joined, 0, 76)
-  let assert Ok(tail) = bit_array.slice(joined, 80, bit_array.byte_size(joined) - 80)
+  let assert Ok(tail) =
+    bit_array.slice(joined, 80, bit_array.byte_size(joined) - 80)
   <<grind(prefix, 0):bits, tail:bits>>
 }
 
@@ -737,7 +848,11 @@ fn netcli(flag: String, args: String) -> String {
     _ -> flag <> " "
   }
   cmd(
-    "bitcoin-cli " <> prefix <> "-rpcuser=e2e -rpcpassword=e2e " <> args <> " 2>/dev/null",
+    "bitcoin-cli "
+    <> prefix
+    <> "-rpcuser=e2e -rpcpassword=e2e "
+    <> args
+    <> " 2>/dev/null",
   )
   |> string.trim
 }
@@ -778,9 +893,27 @@ pub fn header_rules_test() {
   pow.compact_of(main_limit) |> should.equal(0x1d00ffff)
   let assert Ok(reg_limit) = pow.target_of(0x207fffff)
   pow.compact_of(reg_limit) |> should.equal(0x207fffff)
-  pow.retarget(0x1d00ffff, 1_209_600, 0, 0x1d00ffff, False, False, 1_209_600, main_limit)
+  pow.retarget(
+    0x1d00ffff,
+    1_209_600,
+    0,
+    0x1d00ffff,
+    False,
+    False,
+    1_209_600,
+    main_limit,
+  )
   |> should.equal(0x1d00ffff)
-  pow.retarget(0x1c00ffff, 2_419_200, 0, 0x1c00ffff, False, False, 1_209_600, main_limit)
+  pow.retarget(
+    0x1c00ffff,
+    2_419_200,
+    0,
+    0x1c00ffff,
+    False,
+    False,
+    1_209_600,
+    main_limit,
+  )
   |> should.equal(0x1c01fffe)
 
   let testnet = params.testnet()
@@ -809,7 +942,12 @@ pub fn header_rules_test() {
     headers.Entry(<<0:size(256)>>, 11, 20_000, 0x207fffff, 4),
   ]
   let assert Ok(prev) = list.last(warped)
-  let p = params.Params(..params.regtest(), pow_target_timespan: 600, enforce_bip94: True)
+  let p =
+    params.Params(
+      ..params.regtest(),
+      pow_target_timespan: 600,
+      enforce_bip94: True,
+    )
   let attack = headers.Header(<<>>, <<>>, 4, <<>>, 1000, prev.bits)
   headers.contextual(p, warped, prev, attack, 1_000_000)
   |> should.equal(Error("time-timewarp-attack"))
@@ -853,14 +991,21 @@ fn range(from: Int, to: Int) -> List(Int) {
 }
 
 fn header_at(height: Int) -> BitArray {
-  let hex = hdr("getblock " <> hdr("getblockhash " <> int.to_string(height)) <> " 0")
+  let hex =
+    hdr("getblock " <> hdr("getblockhash " <> int.to_string(height)) <> " 0")
   let assert Ok(raw) = hex_decode(hex)
   let assert Ok(header) = bit_array.slice(raw, 0, 80)
   header
 }
 
 fn grind_header(prev: BitArray, time: Int, bits: Int) -> BitArray {
-  let prefix = <<4:32-little, prev:bits, 0:size(256), time:32-little, bits:32-little>>
+  let prefix = <<
+    4:32-little,
+    prev:bits,
+    0:size(256),
+    time:32-little,
+    bits:32-little,
+  >>
   grind_nonce(prefix, bits, 0)
 }
 
@@ -886,4 +1031,3 @@ fn hdr(args: String) -> String {
   )
   |> string.trim
 }
-

@@ -11,7 +11,14 @@ pub fn addrman_count() -> Int
 pub fn sync_headers(host: String, port: Int) -> Result(List(BitArray), String)
 
 @external(erlang, "gleam_bitcoin_node_p2p", "download_blocks")
-pub fn download_blocks(host: String, port: Int) -> Result(List(BitArray), String)
+pub fn download_blocks(
+  host: String,
+  port: Int,
+) -> Result(List(BitArray), String)
 
 @external(erlang, "gleam_bitcoin_node_p2p", "fetch_cmpct")
-pub fn fetch_cmpct(host: String, port: Int, hash: String) -> Result(BitArray, String)
+pub fn fetch_cmpct(
+  host: String,
+  port: Int,
+  hash: String,
+) -> Result(BitArray, String)

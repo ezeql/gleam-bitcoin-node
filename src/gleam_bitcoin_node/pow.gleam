@@ -35,9 +35,7 @@ fn target(compact: Int) -> Result(Int, String) {
 fn overflow(word: Int, size: Int) -> Bool {
   word != 0
   && {
-    size > 34
-    || { word > 0xff && size > 33 }
-    || { word > 0xffff && size > 32 }
+    size > 34 || { word > 0xff && size > 33 } || { word > 0xffff && size > 32 }
   }
 }
 
@@ -58,7 +56,8 @@ pub fn target_of(bits: Int) -> Result(Int, String) {
   }
   let value = case size <= 3 {
     True -> word
-    False -> int.bitwise_and(int.bitwise_shift_left(word, 8 * { size - 3 }), mask256())
+    False ->
+      int.bitwise_and(int.bitwise_shift_left(word, 8 * { size - 3 }), mask256())
   }
   let negative = word != 0 && int.bitwise_and(bits, 0x00800000) != 0
   let overflow =
@@ -77,9 +76,16 @@ pub fn target_of(bits: Int) -> Result(Int, String) {
 pub fn compact_of(value: Int) -> Int {
   let size = { bit_length(value) + 7 } / 8
   let compact = case size <= 3 {
-    True -> int.bitwise_and(int.bitwise_shift_left(value, 8 * { 3 - size }), 0xffffffff)
+    True ->
+      int.bitwise_and(
+        int.bitwise_shift_left(value, 8 * { 3 - size }),
+        0xffffffff,
+      )
     False ->
-      int.bitwise_and(int.bitwise_shift_right(value, 8 * { size - 3 }), 0xffffffff)
+      int.bitwise_and(
+        int.bitwise_shift_right(value, 8 * { size - 3 }),
+        0xffffffff,
+      )
   }
   let #(compact, size) = case int.bitwise_and(compact, 0x00800000) != 0 {
     True -> #(int.bitwise_shift_right(compact, 8), size + 1)

@@ -12,4 +12,6 @@ No instala nada en la máquina. Hace falta Docker.
 make test
 ```
 
+Eso también corre, dentro de la imagen, `gleam format --check` y `gleam build --warnings-as-errors`. Son los controles que Gleam documenta para CI: el formateador oficial y las advertencias del compilador.
+
 Eso construye una imagen con Gleam y Bitcoin Core 32.1, mina bloques vacíos en regtest y compara el tip. Un bloque con merkle mala se rechaza sin mover el tip. `submitblock` de bitcoind y Gleam dan la misma razón para bad-cb-amount, bad-txns-nonfinal y bad-cb-height. Un bloque con un gasto real se acepta; un script inválido no mueve el tip. El hash de génesis de mainnet, testnet, testnet4, signet y regtest tiene que coincidir con bitcoind. Las cabeceras que mina bitcoind se aceptan; una con bits o tiempo ilegal no mueve el tip de cabeceras.

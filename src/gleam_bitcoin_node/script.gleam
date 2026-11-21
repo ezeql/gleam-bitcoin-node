@@ -45,7 +45,8 @@ pub fn witness_sigops(
               case last_push(script_sig) {
                 Ok(data) ->
                   case witness_program(data) {
-                    Ok(#(version, program)) -> witness_for(version, program, witness)
+                    Ok(#(version, program)) ->
+                      witness_for(version, program, witness)
                     Error(_) -> 0
                   }
                 Error(_) -> 0
@@ -62,7 +63,11 @@ pub fn unspendable(script: BitArray) -> Bool {
   }
 }
 
-fn witness_for(version: Int, program: BitArray, witness: List(BitArray)) -> Int {
+fn witness_for(
+  version: Int,
+  program: BitArray,
+  witness: List(BitArray),
+) -> Int {
   let size = bit_array.byte_size(program)
   case version == 0 && size == 20 {
     True -> 1
@@ -148,7 +153,11 @@ fn get_op(script: BitArray) -> Result(#(Int, BitArray, BitArray), Nil) {
   }
 }
 
-fn take_push(op: Int, n: Int, rest: BitArray) -> Result(#(Int, BitArray, BitArray), Nil) {
+fn take_push(
+  op: Int,
+  n: Int,
+  rest: BitArray,
+) -> Result(#(Int, BitArray, BitArray), Nil) {
   case bit_array.slice(rest, 0, n) {
     Error(_) -> Error(Nil)
     Ok(data) ->

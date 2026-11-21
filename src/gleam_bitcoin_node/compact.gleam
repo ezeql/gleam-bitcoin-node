@@ -23,12 +23,23 @@ pub fn reconstruct(payload: BitArray) -> Result(BitArray, String) {
                         Error(reason) -> Error(reason)
                         Ok(txs) ->
                           case header {
-                            <<_:32-little, _:bytes-size(32), root:bytes-size(32), _:bits>> -> {
+                            <<
+                              _:32-little,
+                              _:bytes-size(32),
+                              root:bytes-size(32),
+                              _:bits,
+                            >> -> {
                               let #(got, _) = merkle.block_root(txs)
                               case got == root {
                                 False -> Error("bad-txnmrklroot")
                                 True ->
-                                  Ok(tx.encode_block(tx.ParsedBlock(header, root, txs)))
+                                  Ok(
+                                    tx.encode_block(tx.ParsedBlock(
+                                      header,
+                                      root,
+                                      txs,
+                                    )),
+                                  )
                               }
                             }
                             _ -> Error("truncated")

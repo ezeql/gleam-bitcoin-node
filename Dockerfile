@@ -49,7 +49,9 @@ COPY gleam.toml ./
 COPY src src
 COPY native native
 COPY test test
-RUN gleam deps download && gleam build \
+RUN gleam deps download \
+  && gleam format --check \
+  && gleam build --warnings-as-errors \
   && erl -noshell -eval 'io:format("~ts/erts-~ts/include", [code:root_dir(), erlang:system_info(version)]), halt().' > /tmp/erts_inc \
   && gcc -fPIC -shared -O2 -std=c11 -I"$(cat /tmp/erts_inc)" -I/usr/local/include \
        native/kernel_nif.c -o /usr/local/lib/gleam_kernel_nif.so \

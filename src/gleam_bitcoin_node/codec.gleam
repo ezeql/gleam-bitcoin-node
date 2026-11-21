@@ -7,7 +7,13 @@ pub type Header {
 }
 
 pub type Coinbase {
-  Coinbase(txid: BitArray, script_sig: BitArray, output_sum: Int, nonce: BitArray, commitment: BitArray)
+  Coinbase(
+    txid: BitArray,
+    script_sig: BitArray,
+    output_sum: Int,
+    nonce: BitArray,
+    commitment: BitArray,
+  )
 }
 
 pub type Parsed {
@@ -19,8 +25,16 @@ pub fn decode_block(raw: BitArray) -> Result(Parsed, String) {
     Error(_) -> Error("truncated")
     Ok(header_raw) -> {
       case header_raw {
-        <<_:32-little, prev:bytes-size(32), merkle:bytes-size(32), _:32-little, bits:32-little, _:32-little>> -> {
-          let header = Header(raw: header_raw, prev: prev, merkle: merkle, bits: bits)
+        <<
+          _:32-little,
+          prev:bytes-size(32),
+          merkle:bytes-size(32),
+          _:32-little,
+          bits:32-little,
+          _:32-little,
+        >> -> {
+          let header =
+            Header(raw: header_raw, prev: prev, merkle: merkle, bits: bits)
           case bit_array.slice(raw, 80, bit_array.byte_size(raw) - 80) {
             Error(_) -> Error("truncated")
             Ok(body) ->
@@ -62,14 +76,20 @@ fn decode_tx(raw: BitArray) -> Result(#(Coinbase, BitArray), String) {
   }
 }
 
-fn decode_after_version(version: BitArray, rest: BitArray) -> Result(#(Coinbase, BitArray), String) {
+fn decode_after_version(
+  version: BitArray,
+  rest: BitArray,
+) -> Result(#(Coinbase, BitArray), String) {
   case rest {
     <<0, 1, rest:bits>> -> decode_segwit(version, rest)
     _ -> Error("unexpected-witness")
   }
 }
 
-fn decode_segwit(version: BitArray, rest: BitArray) -> Result(#(Coinbase, BitArray), String) {
+fn decode_segwit(
+  version: BitArray,
+  rest: BitArray,
+) -> Result(#(Coinbase, BitArray), String) {
   case inputs(rest) {
     Error(reason) -> Error(reason)
     Ok(#(vin, script_sig, after_in)) ->
@@ -81,7 +101,13 @@ fn decode_segwit(version: BitArray, rest: BitArray) -> Result(#(Coinbase, BitArr
             Ok(#(nonce, after_wit)) ->
               case after_wit {
                 <<locktime:bytes-size(4), left:bits>> -> {
-                  let txid = hash.hash256(<<version:bits, vin:bits, vout_raw:bits, locktime:bits>>)
+                  let txid =
+                    hash.hash256(<<
+                      version:bits,
+                      vin:bits,
+                      vout_raw:bits,
+                      locktime:bits,
+                    >>)
                   let coin = Coinbase(txid, script_sig, sum, nonce, commitment)
                   Ok(#(coin, left))
                 }
@@ -111,7 +137,9 @@ fn inputs(rest: BitArray) -> Result(#(BitArray, BitArray, BitArray), String) {
                     True ->
                       case rest {
                         <<_:32-little, rest:bits>> -> {
-                          let consumed = bit_array.byte_size(start) - bit_array.byte_size(rest)
+                          let consumed =
+                            bit_array.byte_size(start)
+                            - bit_array.byte_size(rest)
                           case bit_array.slice(start, 0, consumed) {
                             Ok(vin) -> Ok(#(vin, script_sig, rest))
                             Error(_) -> Error("truncated")
@@ -130,7 +158,11 @@ fn inputs(rest: BitArray) -> Result(#(BitArray, BitArray, BitArray), String) {
   }
 }
 
-fn outputs(rest: BitArray, sum: Int, commitment: BitArray) -> Result(#(Int, BitArray, BitArray, BitArray), String) {
+fn outputs(
+  rest: BitArray,
+  sum: Int,
+  commitment: BitArray,
+) -> Result(#(Int, BitArray, BitArray, BitArray), String) {
   let start = rest
   case compact(rest) {
     Error(_) -> Error("truncated")
@@ -138,7 +170,13 @@ fn outputs(rest: BitArray, sum: Int, commitment: BitArray) -> Result(#(Int, BitA
   }
 }
 
-fn read_outputs(n: Int, rest: BitArray, sum: Int, commitment: BitArray, start: BitArray) -> Result(#(Int, BitArray, BitArray, BitArray), String) {
+fn read_outputs(
+  n: Int,
+  rest: BitArray,
+  sum: Int,
+  commitment: BitArray,
+  start: BitArray,
+) -> Result(#(Int, BitArray, BitArray, BitArray), String) {
   case n {
     0 -> {
       let consumed = bit_array.byte_size(start) - bit_array.byte_size(rest)
@@ -162,11 +200,19 @@ fn read_outputs(n: Int, rest: BitArray, sum: Int, commitment: BitArray, start: B
                       case script(rest) {
                         Error(_) -> Error("truncated")
                         Ok(#(script, rest)) -> {
-                          let commitment = case value == 0 && commitment == <<>> {
+                          let commitment = case
+                            value == 0 && commitment == <<>>
+                          {
                             True -> script
                             False -> commitment
                           }
-                          read_outputs(n - 1, rest, sum + value, commitment, start)
+                          read_outputs(
+                            n - 1,
+                            rest,
+                            sum + value,
+                            commitment,
+                            start,
+                          )
                         }
                       }
                   }
@@ -197,7 +243,10 @@ fn script(rest: BitArray) -> Result(#(BitArray, BitArray), String) {
   case compact(rest) {
     Error(_) -> Error("truncated")
     Ok(#(len, rest)) ->
-      case bit_array.slice(rest, 0, len), bit_array.slice(rest, len, bit_array.byte_size(rest) - len) {
+      case
+        bit_array.slice(rest, 0, len),
+        bit_array.slice(rest, len, bit_array.byte_size(rest) - len)
+      {
         Ok(item), Ok(left) -> Ok(#(item, left))
         _, _ -> Error("truncated")
       }
@@ -210,8 +259,9 @@ fn compact(rest: BitArray) -> Result(#(Int, BitArray), String) {
     <<253, n:16-little, rest:bits>> if n >= 253 -> Ok(#(n, rest))
     <<254, n:32-little, rest:bits>> if n >= 0x10000 -> Ok(#(n, rest))
     <<255, n:64-little, rest:bits>> if n >= 0x100000000 -> Ok(#(n, rest))
-    <<253, _:16-little, _:bits>> | <<254, _:32-little, _:bits>> | <<255, _:64-little, _:bits>> ->
-      Error("non-canonical")
+    <<253, _:16-little, _:bits>>
+    | <<254, _:32-little, _:bits>>
+    | <<255, _:64-little, _:bits>> -> Error("non-canonical")
     _ -> Error("truncated")
   }
 }
@@ -219,7 +269,8 @@ fn compact(rest: BitArray) -> Result(#(Int, BitArray), String) {
 pub fn commitment_ok(nonce: BitArray, script: BitArray) -> Bool {
   let expect = hash.hash256(<<0:size(256), nonce:bits>>)
   case script {
-    <<0x6a, 0x24, 0xaa, 0x21, 0xa9, 0xed, got:bytes-size(32), _:bits>> -> got == expect
+    <<0x6a, 0x24, 0xaa, 0x21, 0xa9, 0xed, got:bytes-size(32), _:bits>> ->
+      got == expect
     _ -> False
   }
 }

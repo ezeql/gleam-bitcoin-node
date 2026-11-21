@@ -5,7 +5,10 @@ pub fn new() -> chain.Chain {
   chain.new()
 }
 
-pub fn submit_block(chain: chain.Chain, raw: BitArray) -> Result(chain.Chain, String) {
+pub fn submit_block(
+  chain: chain.Chain,
+  raw: BitArray,
+) -> Result(chain.Chain, String) {
   chain.submit_block(chain, raw)
 }
 

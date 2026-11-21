@@ -24,7 +24,11 @@ const inputs_path = "/tmp/gleam-archive/inputs.seg"
 const witness_path = "/tmp/gleam-archive/witness.seg"
 
 pub type Undo {
-  Undo(prev: BitArray, spent: List(#(String, consensus.Coin)), created: List(String))
+  Undo(
+    prev: BitArray,
+    spent: List(#(String, consensus.Coin)),
+    created: List(String),
+  )
 }
 
 pub type Known {
@@ -46,9 +50,11 @@ const required_bits = 0x207fffff
 
 const max_block_weight = 4_000_000
 
-const bip30_repeat_a = "00000000000a4d0a398161ffc163c503763b1f4360639393e0e4c8e300e0caec"
+const bip30_repeat_a =
+  "00000000000a4d0a398161ffc163c503763b1f4360639393e0e4c8e300e0caec"
 
-const bip30_repeat_b = "00000000000743f190a18c5577a3c2d2a1f610ae9601ac046a38084ccb7cd721"
+const bip30_repeat_b =
+  "00000000000743f190a18c5577a3c2d2a1f610ae9601ac046a38084ccb7cd721"
 
 type View {
   View(
@@ -103,7 +109,11 @@ pub fn submit_block(chain: Chain, raw: BitArray) -> Result(Chain, String) {
   }
 }
 
-fn route(chain: Chain, raw: BitArray, block: tx.ParsedBlock) -> Result(Chain, String) {
+fn route(
+  chain: Chain,
+  raw: BitArray,
+  block: tx.ParsedBlock,
+) -> Result(Chain, String) {
   case block.header {
     <<_:32-little, prev:bytes-size(32), _:bits>> ->
       case prev == chain.tip {
@@ -114,7 +124,11 @@ fn route(chain: Chain, raw: BitArray, block: tx.ParsedBlock) -> Result(Chain, St
   }
 }
 
-fn extend(chain: Chain, raw: BitArray, block: tx.ParsedBlock) -> Result(Chain, String) {
+fn extend(
+  chain: Chain,
+  raw: BitArray,
+  block: tx.ParsedBlock,
+) -> Result(Chain, String) {
   case connect(chain, block) {
     Error(reason) -> Error(reason)
     Ok(chain) -> Ok(remember(chain, raw, block))
@@ -220,7 +234,8 @@ fn collect_branch(
     False ->
       case dict.get(chain.blocks, hash.display(cursor)) {
         Error(_) -> acc
-        Ok(known) -> collect_branch(chain, known.prev, ancestor, [known.raw, ..acc])
+        Ok(known) ->
+          collect_branch(chain, known.prev, ancestor, [known.raw, ..acc])
       }
   }
 }
@@ -235,7 +250,8 @@ fn walk_active(chain: Chain, cursor: BitArray, target: BitArray) -> Bool {
     False ->
       case dict.get(chain.blocks, hash.display(cursor)) {
         Error(_) -> False
-        Ok(known) -> known.prev == target || walk_active(chain, known.prev, target)
+        Ok(known) ->
+          known.prev == target || walk_active(chain, known.prev, target)
       }
   }
 }
@@ -252,8 +268,14 @@ fn height_of(chain: Chain, digest: BitArray) -> Int {
 }
 
 fn remember(chain: Chain, raw: BitArray, block: tx.ParsedBlock) -> Chain {
-  let assert <<_:32-little, prev:bytes-size(32), _:bytes-size(32), _:32-little, _:32-little, _:32-little>> =
-    block.header
+  let assert <<
+    _:32-little,
+    prev:bytes-size(32),
+    _:bytes-size(32),
+    _:32-little,
+    _:32-little,
+    _:32-little,
+  >> = block.header
   let digest = hash.hash256(block.header)
   Chain(
     ..chain,
@@ -283,7 +305,8 @@ fn connect(chain: Chain, block: tx.ParsedBlock) -> Result(Chain, String) {
             True ->
               case pow.check(block.header, bits) {
                 Error(reason) -> Error(reason)
-                Ok(_) -> check_body(chain, block, merkle, time, chain.height + 1)
+                Ok(_) ->
+                  check_body(chain, block, merkle, time, chain.height + 1)
               }
           }
       }
@@ -364,16 +387,17 @@ fn spend(
     Error(reason) -> Error(reason)
     Ok(#(view, fees, _, jobs)) -> {
       let assert [coinbase, ..] = block.txs
-      case consensus.output_sum(coinbase.outputs) > fees + codec.subsidy(height) {
+      case
+        consensus.output_sum(coinbase.outputs) > fees + codec.subsidy(height)
+      {
         True -> Error("bad-cb-amount")
         False ->
-          case
-            kernel.verify_jobs(jobs, height, hash.hash256(block.header))
-          {
+          case kernel.verify_jobs(jobs, height, hash.hash256(block.header)) {
             Error(_) -> Error("block-script-verify-flag-failed")
             Ok(_) -> {
               let coins = materialize(view)
-              let undo = Undo(chain.tip, spent_pairs(view), created_keys(view.extra))
+              let undo =
+                Undo(chain.tip, spent_pairs(view), created_keys(view.extra))
               store_block(height, block.txs, undo)
               Ok(Chain(
                 height: height,
@@ -399,7 +423,10 @@ fn connect_txs(
   fees: Int,
   sigops: Int,
   jobs: List(#(BitArray, List(#(BitArray, Int)))),
-) -> Result(#(View, Int, Int, List(#(BitArray, List(#(BitArray, Int))))), String) {
+) -> Result(
+  #(View, Int, Int, List(#(BitArray, List(#(BitArray, Int))))),
+  String,
+) {
   case txs {
     [] -> Ok(#(view, fees, sigops, list.reverse(jobs)))
     [tx, ..rest] -> {
@@ -416,15 +443,19 @@ fn connect_txs(
                 False ->
                   case
                     coinbase
-                    || consensus.sequence_ok(tx, coins, height >= 1, height, prev_mtp, fn(
-                      at,
-                    ) {
-                      median_at(times, at)
-                    })
+                    || consensus.sequence_ok(
+                      tx,
+                      coins,
+                      height >= 1,
+                      height,
+                      prev_mtp,
+                      fn(at) { median_at(times, at) },
+                    )
                   {
                     False -> Error("bad-txns-nonfinal")
                     True -> {
-                      let sigops = sigops + consensus.sigop_cost(tx, coins, coinbase)
+                      let sigops =
+                        sigops + consensus.sigop_cost(tx, coins, coinbase)
                       case consensus.too_many_sigops(sigops) {
                         True -> Error("bad-blk-sigops")
                         False ->
@@ -505,7 +536,10 @@ fn output_records(height: Int, created: List(String)) -> BitArray {
   })
 }
 
-fn input_records(height: Int, spent: List(#(String, consensus.Coin))) -> BitArray {
+fn input_records(
+  height: Int,
+  spent: List(#(String, consensus.Coin)),
+) -> BitArray {
   list.fold(spent, <<>>, fn(acc, pair) {
     let #(key, _) = pair
     let #(txid, vout) = key_parts(key)
@@ -518,7 +552,13 @@ fn witness_records(height: Int, txs: List(tx.Tx)) -> BitArray {
     list.fold(tx.inputs, acc, fn(acc, input) {
       case input.witness {
         [] -> acc
-        stack -> <<acc:bits, 3, height:32-little, tx.txid:bits, stack_bytes(stack):bits>>
+        stack -> <<
+          acc:bits,
+          3,
+          height:32-little,
+          tx.txid:bits,
+          stack_bytes(stack):bits,
+        >>
       }
     })
   })
@@ -558,7 +598,11 @@ fn merkle_ok(txs: List(tx.Tx), merkle: BitArray) -> Result(Nil, String) {
 
 fn length_ok(txs: List(tx.Tx)) -> Result(Nil, String) {
   let count = list.length(txs)
-  case count == 0 || count * 4 > max_block_weight || base_size(txs) * 4 > max_block_weight {
+  case
+    count == 0
+    || count * 4 > max_block_weight
+    || base_size(txs) * 4 > max_block_weight
+  {
     True -> Error("bad-blk-length")
     False -> Ok(Nil)
   }
@@ -634,7 +678,8 @@ fn nonce_ok(
       case bit_array.byte_size(nonce) == 32 {
         False -> Error("bad-witness-nonce-size")
         True -> {
-          let expect = hash.hash256(<<merkle.witness_root(txs):bits, nonce:bits>>)
+          let expect =
+            hash.hash256(<<merkle.witness_root(txs):bits, nonce:bits>>)
           case script {
             <<0x6a, 0x24, 0xaa, 0x21, 0xa9, 0xed, got:bytes-size(32), _:bits>> ->
               case got == expect {
@@ -693,7 +738,8 @@ fn tx_overwrites(
     [_, ..rest] ->
       case dict.get(coins, coin_key(item.txid, index)) {
         Ok(_) -> True
-        Error(_) -> tx_overwrites(coins, tx.Tx(..item, outputs: rest), index + 1)
+        Error(_) ->
+          tx_overwrites(coins, tx.Tx(..item, outputs: rest), index + 1)
       }
   }
 }
@@ -736,7 +782,11 @@ fn tx_fee(
   }
 }
 
-fn lookup(view: View, txid: BitArray, index: Int) -> Result(consensus.Coin, String) {
+fn lookup(
+  view: View,
+  txid: BitArray,
+  index: Int,
+) -> Result(consensus.Coin, String) {
   let key = coin_key(txid, index)
   case list.contains(view.spent, key) {
     True -> Error("bad-txns-inputs-missingorspent")
@@ -766,7 +816,10 @@ fn spend_inputs(view: View, inputs: List(tx.Input)) -> View {
     [input, ..rest] -> {
       let key = coin_key(input.prev_hash, input.prev_index)
       spend_inputs(
-        View(..view, extra: drop_extra(view.extra, key), spent: [key, ..view.spent]),
+        View(..view, extra: drop_extra(view.extra, key), spent: [
+          key,
+          ..view.spent
+        ]),
         rest,
       )
     }
@@ -786,23 +839,26 @@ fn add_outputs(
       let view = case script.unspendable(output.script_pubkey) {
         True -> view
         False ->
-          View(
-            ..view,
-            extra: [
-              #(
-                coin_key(item.txid, index),
-                consensus.Coin(
-                  value: output.value,
-                  script: output.script_pubkey,
-                  height: height,
-                  coinbase: coinbase,
-                ),
+          View(..view, extra: [
+            #(
+              coin_key(item.txid, index),
+              consensus.Coin(
+                value: output.value,
+                script: output.script_pubkey,
+                height: height,
+                coinbase: coinbase,
               ),
-              ..view.extra
-            ],
-          )
+            ),
+            ..view.extra
+          ])
       }
-      add_outputs(view, tx.Tx(..item, outputs: rest), height, coinbase, index + 1)
+      add_outputs(
+        view,
+        tx.Tx(..item, outputs: rest),
+        height,
+        coinbase,
+        index + 1,
+      )
     }
   }
 }

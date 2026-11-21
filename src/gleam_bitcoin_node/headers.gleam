@@ -11,7 +11,8 @@ const max_future = 7200
 
 const max_timewarp = 600
 
-const regtest_genesis = "0100000000000000000000000000000000000000000000000000000000000000000000003ba3edfd7a7b12b27ac72c3e67768f617fc81bc3888a51323a9fb8aa4b1e5e4adae5494dffff7f2002000000"
+const regtest_genesis =
+  "0100000000000000000000000000000000000000000000000000000000000000000000003ba3edfd7a7b12b27ac72c3e67768f617fc81bc3888a51323a9fb8aa4b1e5e4adae5494dffff7f2002000000"
 
 pub type Header {
   Header(
@@ -65,7 +66,11 @@ pub fn reached_minimum(chain: Chain, minimum_hex: String) -> Bool {
   chain_work(chain.entries, 0) >= hex_int(minimum_hex)
 }
 
-fn apply_all(chain: Chain, raws: List(BitArray), now: Int) -> Result(Chain, String) {
+fn apply_all(
+  chain: Chain,
+  raws: List(BitArray),
+  now: Int,
+) -> Result(Chain, String) {
   case raws {
     [] -> Ok(chain)
     [raw, ..rest] ->
@@ -111,7 +116,11 @@ pub fn submit(chain: Chain, raw: BitArray, now: Int) -> Result(Chain, String) {
   }
 }
 
-pub fn submit_header(chain: Chain, header: Header, now: Int) -> Result(Chain, String) {
+pub fn submit_header(
+  chain: Chain,
+  header: Header,
+  now: Int,
+) -> Result(Chain, String) {
   let limit = pow_limit(chain.params)
   case pow.target_of(header.bits) {
     Error(reason) -> Error(reason)
@@ -125,12 +134,22 @@ pub fn submit_header(chain: Chain, header: Header, now: Int) -> Result(Chain, St
               case header.prev == tip(chain).hash {
                 False -> Error("prev-blk-not-found")
                 True ->
-                  case contextual(chain.params, chain.entries, tip(chain), header, now) {
+                  case
+                    contextual(
+                      chain.params,
+                      chain.entries,
+                      tip(chain),
+                      header,
+                      now,
+                    )
+                  {
                     Error(reason) -> Error(reason)
                     Ok(_) ->
                       Ok(Chain(
                         chain.params,
-                        list.append(chain.entries, [entry(header, tip(chain).height + 1)]),
+                        list.append(chain.entries, [
+                          entry(header, tip(chain).height + 1),
+                        ]),
                       ))
                   }
               }
@@ -155,7 +174,8 @@ pub fn contextual(
       case header.time <= median_time(entries, prev.height) {
         True -> Error("time-too-old")
         False ->
-          case p.enforce_bip94
+          case
+            p.enforce_bip94
             && rem(height, interval) == 0
             && header.time < prev.time - max_timewarp
           {
@@ -165,7 +185,8 @@ pub fn contextual(
                 True -> Error("time-too-new")
                 False ->
                   case version_ok(p, height, header.version) {
-                    False -> Error("bad-version(0x" <> hex8(header.version) <> ")")
+                    False ->
+                      Error("bad-version(0x" <> hex8(header.version) <> ")")
                     True -> Ok(Nil)
                   }
               }
@@ -174,7 +195,12 @@ pub fn contextual(
   }
 }
 
-pub fn next_bits(p: params.Params, entries: List(Entry), prev: Entry, block_time: Int) -> Int {
+pub fn next_bits(
+  p: params.Params,
+  entries: List(Entry),
+  prev: Entry,
+  block_time: Int,
+) -> Int {
   let interval = p.pow_target_timespan / p.pow_target_spacing
   let limit = pow.compact_of(pow_limit(p))
   let height = prev.height + 1
@@ -206,8 +232,14 @@ pub fn next_bits(p: params.Params, entries: List(Entry), prev: Entry, block_time
 
 pub fn decode(raw: BitArray) -> Result(Header, String) {
   case raw {
-    <<version:32-little, prev:bytes-size(32), _:bytes-size(32), time:32-little, bits:32-little, _:32-little>> ->
-      Ok(Header(raw, hash.hash256(raw), version, prev, time, bits))
+    <<
+      version:32-little,
+      prev:bytes-size(32),
+      _:bytes-size(32),
+      time:32-little,
+      bits:32-little,
+      _:32-little,
+    >> -> Ok(Header(raw, hash.hash256(raw), version, prev, time, bits))
     _ -> Error("truncated")
   }
 }
@@ -252,10 +284,19 @@ fn median_time(entries: List(Entry), height: Int) -> Int {
   median(sort(times_back(entries, height, 11, [])))
 }
 
-fn times_back(entries: List(Entry), height: Int, left: Int, acc: List(Int)) -> List(Int) {
+fn times_back(
+  entries: List(Entry),
+  height: Int,
+  left: Int,
+  acc: List(Int),
+) -> List(Int) {
   case left == 0 || height < 0 {
     True -> acc
-    False -> times_back(entries, height - 1, left - 1, [at(entries, height).time, ..acc])
+    False ->
+      times_back(entries, height - 1, left - 1, [
+        at(entries, height).time,
+        ..acc
+      ])
   }
 }
 
@@ -263,19 +304,26 @@ fn median(sorted: List(Int)) -> Int {
   at_int(sorted, list.length(sorted) / 2)
 }
 
-fn walk_back(entries: List(Entry), entry: Entry, interval: Int, limit: Int) -> Entry {
+fn walk_back(
+  entries: List(Entry),
+  entry: Entry,
+  interval: Int,
+  limit: Int,
+) -> Entry {
   case entry.height == 0 {
     True -> entry
     False ->
       case rem(entry.height, interval) != 0 && entry.bits == limit {
-        True -> walk_back(entries, at(entries, entry.height - 1), interval, limit)
+        True ->
+          walk_back(entries, at(entries, entry.height - 1), interval, limit)
         False -> entry
       }
   }
 }
 
 fn at(entries: List(Entry), height: Int) -> Entry {
-  let assert Ok(entry) = list.find(entries, fn(entry) { entry.height == height })
+  let assert Ok(entry) =
+    list.find(entries, fn(entry) { entry.height == height })
   entry
 }
 

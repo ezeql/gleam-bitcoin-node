@@ -40,7 +40,14 @@ pub fn decode_block(raw: BitArray) -> Result(ParsedBlock, String) {
     Error(_) -> Error("truncated")
     Ok(header) ->
       case header {
-        <<_:32-little, _:bytes-size(32), merkle:bytes-size(32), _:32-little, _:32-little, _:32-little>> ->
+        <<
+          _:32-little,
+          _:bytes-size(32),
+          merkle:bytes-size(32),
+          _:32-little,
+          _:32-little,
+          _:32-little,
+        >> ->
           case bit_array.slice(raw, 80, bit_array.byte_size(raw) - 80) {
             Error(_) -> Error("truncated")
             Ok(body) ->
@@ -63,7 +70,11 @@ pub fn decode_block(raw: BitArray) -> Result(ParsedBlock, String) {
 }
 
 pub fn encode_block(block: ParsedBlock) -> BitArray {
-  <<block.header:bits, encode_compact(list.length(block.txs)):bits, encode_txs(block.txs):bits>>
+  <<
+    block.header:bits,
+    encode_compact(list.length(block.txs)):bits,
+    encode_txs(block.txs):bits,
+  >>
 }
 
 pub fn decode(raw: BitArray) -> Result(#(Tx, BitArray), String) {
@@ -97,7 +108,11 @@ pub fn weight(tx: Tx) -> Int {
   tx.base_size * 3 + bit_array.byte_size(tx.raw)
 }
 
-fn decode_after_version(bin: BitArray, version: Int, rest: BitArray) -> Result(#(Tx, BitArray), String) {
+fn decode_after_version(
+  bin: BitArray,
+  version: Int,
+  rest: BitArray,
+) -> Result(#(Tx, BitArray), String) {
   case decode_inputs(rest) {
     Error(reason) -> Error(reason)
     Ok(#([], rest)) -> decode_marker(bin, version, rest)
@@ -110,7 +125,11 @@ fn decode_after_version(bin: BitArray, version: Int, rest: BitArray) -> Result(#
 }
 
 // An empty vin is the segwit marker. The next byte is the flag.
-fn decode_marker(bin: BitArray, version: Int, rest: BitArray) -> Result(#(Tx, BitArray), String) {
+fn decode_marker(
+  bin: BitArray,
+  version: Int,
+  rest: BitArray,
+) -> Result(#(Tx, BitArray), String) {
   case rest {
     <<0, rest:bits>> -> finish(bin, version, 0, [], [], rest, -1)
     <<flags, rest:bits>> -> {
@@ -146,7 +165,19 @@ fn finish(
         0 ->
           case rest {
             <<locktime:32-little, left:bits>> ->
-              Ok(#(build_tx(bin, version, vin, vout, locktime, left, body_start, body_end), left))
+              Ok(#(
+                build_tx(
+                  bin,
+                  version,
+                  vin,
+                  vout,
+                  locktime,
+                  left,
+                  body_start,
+                  body_end,
+                ),
+                left,
+              ))
             _ -> Error("truncated")
           }
         _ -> Error("unknown-tx-optional-data")
@@ -171,7 +202,8 @@ fn build_tx(
   let txid = case has_witness {
     True -> {
       let assert Ok(ver) = bit_array.slice(bin, 0, 4)
-      let assert Ok(body) = bit_array.slice(bin, body_start, body_end - body_start)
+      let assert Ok(body) =
+        bit_array.slice(bin, body_start, body_end - body_start)
       hash.hash256(<<ver:bits, body:bits, locktime:32-little>>)
     }
     False -> wtxid
@@ -261,7 +293,10 @@ fn decode_witnesses(
           case read_n(n, rest, take_bytes, []) {
             Error(reason) -> Error(reason)
             Ok(#(stack, rest)) ->
-              decode_witnesses(tail, rest, [Input(..input, witness: stack), ..acc])
+              decode_witnesses(tail, rest, [
+                Input(..input, witness: stack),
+                ..acc
+              ])
           }
       }
   }
@@ -284,11 +319,17 @@ fn read_n(
 }
 
 fn encode_inputs(inputs: List(Input)) -> BitArray {
-  <<encode_compact(list.length(inputs)):bits, concat(list.map(inputs, encode_input)):bits>>
+  <<
+    encode_compact(list.length(inputs)):bits,
+    concat(list.map(inputs, encode_input)):bits,
+  >>
 }
 
 fn encode_outputs(outputs: List(Output)) -> BitArray {
-  <<encode_compact(list.length(outputs)):bits, concat(list.map(outputs, encode_output)):bits>>
+  <<
+    encode_compact(list.length(outputs)):bits,
+    concat(list.map(outputs, encode_output)):bits,
+  >>
 }
 
 fn encode_input(input: Input) -> BitArray {
@@ -309,7 +350,10 @@ fn encode_witnesses(inputs: List(Input)) -> BitArray {
 }
 
 fn encode_stack(stack: List(BitArray)) -> BitArray {
-  <<encode_compact(list.length(stack)):bits, concat(list.map(stack, encode_bytes)):bits>>
+  <<
+    encode_compact(list.length(stack)):bits,
+    concat(list.map(stack, encode_bytes)):bits,
+  >>
 }
 
 fn encode_txs(txs: List(Tx)) -> BitArray {
@@ -354,7 +398,10 @@ fn take_bytes(rest: BitArray) -> Result(#(BitArray, BitArray), String) {
   case compact(rest) {
     Error(reason) -> Error(reason)
     Ok(#(len, rest)) ->
-      case bit_array.slice(rest, 0, len), bit_array.slice(rest, len, bit_array.byte_size(rest) - len) {
+      case
+        bit_array.slice(rest, 0, len),
+        bit_array.slice(rest, len, bit_array.byte_size(rest) - len)
+      {
         Ok(item), Ok(left) -> Ok(#(item, left))
         _, _ -> Error("truncated")
       }
@@ -367,8 +414,9 @@ fn compact(rest: BitArray) -> Result(#(Int, BitArray), String) {
     <<253, n:16-little, rest:bits>> if n >= 253 -> Ok(#(n, rest))
     <<254, n:32-little, rest:bits>> if n >= 0x10000 -> Ok(#(n, rest))
     <<255, n:64-little, rest:bits>> if n >= 0x100000000 -> Ok(#(n, rest))
-    <<253, _:16-little, _:bits>> | <<254, _:32-little, _:bits>> | <<255, _:64-little, _:bits>> ->
-      Error("non-canonical")
+    <<253, _:16-little, _:bits>>
+    | <<254, _:32-little, _:bits>>
+    | <<255, _:64-little, _:bits>> -> Error("non-canonical")
     _ -> Error("truncated")
   }
 }

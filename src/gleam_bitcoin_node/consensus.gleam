@@ -34,7 +34,8 @@ pub fn is_final(tx: tx.Tx, height: Int, cutoff: Int) -> Bool {
         True -> height
         False -> cutoff
       }
-      locktime < limit || list.all(tx.inputs, fn(input) { input.sequence == sequence_final })
+      locktime < limit
+      || list.all(tx.inputs, fn(input) { input.sequence == sequence_final })
     }
   }
 }
@@ -105,7 +106,11 @@ pub fn sigop_cost(tx: tx.Tx, coins: List(Coin), coinbase: Bool) -> Int {
   let legacy = legacy_sigops(tx) * 4
   case coinbase {
     True -> legacy
-    False -> legacy + p2sh_sigops(tx.inputs, coins, 0) * 4 + witness_sigops(tx.inputs, coins, 0)
+    False ->
+      legacy
+      + p2sh_sigops(tx.inputs, coins, 0)
+      * 4
+      + witness_sigops(tx.inputs, coins, 0)
   }
 }
 
@@ -134,7 +139,9 @@ fn relative(
       case coins {
         [] -> #(min_height, min_time)
         [coin, ..coins] -> {
-          let #(min_height, min_time) = case int.bitwise_and(input.sequence, 0x80000000) != 0 {
+          let #(min_height, min_time) = case
+            int.bitwise_and(input.sequence, 0x80000000) != 0
+          {
             True -> #(min_height, min_time)
             False ->
               case int.bitwise_and(input.sequence, 0x00400000) != 0 {
@@ -142,7 +149,10 @@ fn relative(
                   let ancestor = int.max(coin.height - 1, 0)
                   let locked =
                     coin_mtp(ancestor)
-                    + int.bitwise_shift_left(int.bitwise_and(input.sequence, 0xffff), 9)
+                    + int.bitwise_shift_left(
+                      int.bitwise_and(input.sequence, 0xffff),
+                      9,
+                    )
                     - 1
                   #(min_height, int.max(min_time, locked))
                 }
@@ -190,7 +200,11 @@ fn p2sh_sigops(inputs: List(tx.Input), coins: List(Coin), total: Int) -> Int {
   }
 }
 
-fn witness_sigops(inputs: List(tx.Input), coins: List(Coin), total: Int) -> Int {
+fn witness_sigops(
+  inputs: List(tx.Input),
+  coins: List(Coin),
+  total: Int,
+) -> Int {
   case inputs {
     [] -> total
     [input, ..inputs] ->
@@ -201,13 +215,22 @@ fn witness_sigops(inputs: List(tx.Input), coins: List(Coin), total: Int) -> Int 
             inputs,
             coins,
             total
-              + script.witness_sigops(input.script_sig, coin.script, input.witness, True),
+              + script.witness_sigops(
+              input.script_sig,
+              coin.script,
+              input.witness,
+              True,
+            ),
           )
       }
   }
 }
 
-fn input_sum(coins: List(Coin), height: Int, total: Int) -> Result(Int, String) {
+fn input_sum(
+  coins: List(Coin),
+  height: Int,
+  total: Int,
+) -> Result(Int, String) {
   case coins {
     [] -> Ok(total)
     [coin, ..rest] -> {
@@ -243,7 +266,10 @@ fn check_outputs(outputs: List(tx.Output), total: Int) -> Result(Nil, String) {
   }
 }
 
-fn duplicate_inputs(inputs: List(tx.Input), seen: List(String)) -> Result(Nil, String) {
+fn duplicate_inputs(
+  inputs: List(tx.Input),
+  seen: List(String),
+) -> Result(Nil, String) {
   case inputs {
     [] -> Ok(Nil)
     [input, ..rest] -> {
