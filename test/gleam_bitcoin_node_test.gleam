@@ -435,6 +435,7 @@ pub fn reorg_test() {
   let before = gleam_bitcoin_node.utxo_stats(chain).hash
 
   let assert Ok(height) = int.parse(reorg_cli("getblockcount"))
+  height |> should.equal(4)
   let _ = reorg_cli("invalidateblock " <> old)
   // The same empty block would be rebuilt and rejected as already invalid.
   // A different coinbase, one second later, is a real fork.
