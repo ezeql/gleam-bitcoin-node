@@ -21,6 +21,7 @@ import gleam_bitcoin_node/merkle
 import gleam_bitcoin_node/p2p
 import gleam_bitcoin_node/params
 import gleam_bitcoin_node/pow
+import gleam_bitcoin_node/rpc
 import gleam_bitcoin_node/script
 import gleam_bitcoin_node/tx
 import gleeunit
@@ -1452,6 +1453,76 @@ fn json_strings(json: String, key: String, acc: List(String)) -> List(String) {
         Ok(#(value, rest)) -> json_strings(rest, key, [value, ..acc])
       }
   }
+}
+
+pub fn rpc_chain_test() {
+  let _ = cmd("rm -rf /tmp/btc-rpc")
+  start_node("/tmp/btc-rpc", "18485", "18486")
+  let hashes =
+    rpc_cli("generatetodescriptor 4 \"raw(51)\"")
+    |> extract_hashes([])
+    |> list.reverse
+  let view =
+    list.fold(hashes, index.new(), fn(view, hash) {
+      let assert Ok(raw) = hex_decode(rpc_cli("getblock " <> hash <> " 0"))
+      let assert Ok(view) = index.connect(view, raw)
+      view
+    })
+  let assert Ok(Nil) = rpc.start(18_487)
+  rpc.publish(view)
+
+  let info = gleam_rpc("getblockchaininfo", "[]")
+  json_string(info, "bestblockhash")
+  |> should.equal(rpc_cli("getbestblockhash"))
+  json_int(info, "blocks") |> should.equal(4)
+
+  let set = gleam_rpc("gettxoutsetinfo", "[]")
+  let core = rpc_cli("gettxoutsetinfo")
+  json_string(set, "hash_serialized_3")
+  |> should.equal(json_string(core, "hash_serialized_3"))
+  json_int(set, "txouts") |> should.equal(json_int(core, "txouts"))
+  json_int(set, "transactions") |> should.equal(json_int(core, "transactions"))
+  json_int(set, "bogosize") |> should.equal(json_int(core, "bogosize"))
+
+  let tip = rpc_cli("getbestblockhash")
+  json_string(gleam_rpc("getblock", "[\"" <> tip <> "\", 0]"), "result")
+  |> should.equal(rpc_cli("getblock " <> tip <> " 0"))
+  let assert Ok(tx_rest) =
+    string.split_once(
+      gleam_rpc("getblock", "[\"" <> tip <> "\"]"),
+      "\"tx\": [\"",
+    )
+  let assert Ok(#(txid, _)) = string.split_once(tx_rest.1, "\"")
+  json_string(
+    gleam_rpc("getrawtransaction", "[\"" <> txid <> "\", 0]"),
+    "result",
+  )
+  |> should.equal(rpc_cli("getrawtransaction " <> txid <> " false"))
+  let out = gleam_rpc("gettxout", "[\"" <> txid <> "\", 0]")
+  let core_out = rpc_cli("gettxout " <> txid <> " 0")
+  json_string(out, "hex") |> should.equal(json_string(core_out, "hex"))
+
+  let assert Ok(raw) = hex_decode(rpc_cli("getblock " <> tip <> " 0"))
+  let bad = hex_encode(bump_subsidy(raw))
+  let _ = rpc_cli("invalidateblock " <> tip)
+  let core_reason = rpc_cli("submitblock " <> bad)
+  let _ = rpc_cli("reconsiderblock " <> tip)
+  json_string(gleam_rpc("submitblock", "[\"" <> bad <> "\"]"), "result")
+  |> should.equal(core_reason)
+}
+
+fn gleam_rpc(method: String, params: String) -> String {
+  cmd(
+    "curl -s -H 'content-type: application/json' -d '{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\""
+    <> method
+    <> "\",\"params\":"
+    <> params
+    <> "}' http://127.0.0.1:18487",
+  )
+}
+
+fn rpc_cli(args: String) -> String {
+  node_cli("/tmp/btc-rpc", "18485", args <> " 2>&1")
 }
 
 fn hdr(args: String) -> String {
