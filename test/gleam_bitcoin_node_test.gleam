@@ -427,6 +427,57 @@ fn utxo_cli(args: String) -> String {
   |> string.trim
 }
 
+pub fn reorg_test() {
+  start_node("/tmp/btc-reorg", "18455", "18456")
+  let chain = submit_reorg(gleam_bitcoin_node.new(), reorg_mine(4))
+  let old = gleam_bitcoin_node.tip_hex(chain)
+  old |> should.equal(reorg_cli("getbestblockhash"))
+  let before = gleam_bitcoin_node.utxo_stats(chain).hash
+
+  let assert Ok(height) = int.parse(reorg_cli("getblockcount"))
+  let _ = reorg_cli("invalidateblock " <> old)
+  // The same empty block would be rebuilt and rejected as already invalid.
+  // A different coinbase, one second later, is a real fork.
+  let _ = reorg_cli("createwallet reorg")
+  let addr = reorg_cli("getnewaddress")
+  let _ = cmd("sleep 1")
+  let _ = reorg_cli("generatetoaddress 2 \"" <> addr <> "\"")
+  let first = reorg_cli("getblockhash " <> int.to_string(height))
+  let second = reorg_cli("getblockhash " <> int.to_string(height + 1))
+  string.length(first) |> should.equal(64)
+  string.length(second) |> should.equal(64)
+  let alt = [first, second]
+  let chain = submit_reorg(chain, [first])
+  gleam_bitcoin_node.tip_hex(chain) |> should.equal(old)
+  gleam_bitcoin_node.utxo_stats(chain).hash |> should.equal(before)
+
+  let chain = submit_reorg(chain, alt)
+  gleam_bitcoin_node.tip_hex(chain) |> should.equal(reorg_cli("getbestblockhash"))
+}
+
+fn submit_reorg(chain, hashes: List(String)) {
+  list.fold(hashes, chain, fn(chain, hash) {
+    let assert Ok(raw) = hex_decode(reorg_cli("getblock " <> hash <> " 0"))
+    let assert Ok(chain) = gleam_bitcoin_node.submit_block(chain, raw)
+    chain
+  })
+}
+
+fn reorg_mine(n: Int) -> List(String) {
+  reorg_cli("generatetodescriptor " <> int.to_string(n) <> " \"raw(51)\"")
+  |> extract_hashes([])
+  |> list.reverse
+}
+
+fn reorg_cli(args: String) -> String {
+  cmd(
+    "bitcoin-cli -regtest -datadir=/tmp/btc-reorg -rpcport=18455 -rpcuser=e2e -rpcpassword=e2e "
+    <> args
+    <> " 2>&1",
+  )
+  |> string.trim
+}
+
 fn script_block(height: Int) -> BitArray {
   let hex =
     script_cli(

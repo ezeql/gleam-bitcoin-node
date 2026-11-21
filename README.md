@@ -1,6 +1,6 @@
 # gleam-bitcoin-node
 
-Port experimental de exnode a Gleam. El paquete se llama `gleam_bitcoin_node`. Este corte conecta bloques de regtest, verifica los scripts con libbitcoinkernel v32.1 y guarda outputs, inputs y witnesses solo dentro de Docker. `hash_serialized_3` es el del UTXO activo. Los flags de consenso dependen de la altura; assumevalid en cero no salta esas pruebas. No guarda la cadena en disco, no habla por la red y no guarda una billetera. No sirve para fondos reales.
+Port experimental de exnode a Gleam. El paquete se llama `gleam_bitcoin_node`. Este corte conecta bloques de regtest, verifica los scripts con libbitcoinkernel v32.1 y guarda outputs, inputs y witnesses solo dentro de Docker. `hash_serialized_3` es el del UTXO activo. Más trabajo reemplaza el tip; igual trabajo no lo mueve, y un reorg desconecta y reconecta. Los flags de consenso dependen de la altura; assumevalid en cero no salta esas pruebas. No guarda la cadena en disco, no habla por la red y no guarda una billetera. No sirve para fondos reales.
 
 Los issues del port completo están en https://github.com/ezeql/gleam-bitcoin-node/issues.
 
