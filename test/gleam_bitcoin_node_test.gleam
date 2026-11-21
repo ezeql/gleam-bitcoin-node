@@ -2,6 +2,7 @@ import gleam/bit_array
 import gleam/dict
 import gleam/int
 import gleam/list
+import gleam/option.{Some}
 import gleam/string
 import gleam_bitcoin_node
 import gleam_bitcoin_node/chain
@@ -11,6 +12,7 @@ import gleam_bitcoin_node/consensus
 import gleam_bitcoin_node/hash
 import gleam_bitcoin_node/headers
 import gleam_bitcoin_node/kernel
+import gleam_bitcoin_node/limits
 import gleam_bitcoin_node/mempool
 import gleam_bitcoin_node/merkle
 import gleam_bitcoin_node/p2p
@@ -1214,6 +1216,135 @@ fn grind_nonce(prefix: BitArray, bits: Int, nonce: Int) -> BitArray {
 fn unix_now() -> Int {
   let assert Ok(now) = int.parse(string.trim(cmd("date +%s")))
   now
+}
+
+pub fn dos_limits_test() {
+  let chain = gleam_bitcoin_node.new()
+  let pool = mempool.new()
+  let tip = gleam_bitcoin_node.tip_hex(chain)
+  let inv = mempool.relay_inv(pool)
+
+  limits.absorb(params.regtest().magic, <<1, 2, 3, 4>>)
+  |> should.equal(Error("bad-magic"))
+  limits.absorb(params.regtest().magic, oversized_header())
+  |> should.equal(Error("oversized"))
+  limits.command_limit("headers", <<253, 2001:16-little>>)
+  |> should.equal(Error("headers-too-large"))
+  limits.command_limit("inv", <<253, 50_001:16-little, 0>>)
+  |> should.equal(Ok(Nil))
+  limits.command_limit("inv", fat_inv())
+  |> should.equal(Error("inv-too-large"))
+  limits.command_limit("addr", fat_addr())
+  |> should.equal(Error("addr-too-large"))
+  limits.recv_flood(5_000_001) |> should.equal(True)
+  limits.recv_flood(5_000_000) |> should.equal(False)
+
+  let budget = limits.new_budget(200_000)
+  let assert Ok(budget) = limits.charge(budget, "a", 100_000)
+  let assert Ok(budget) = limits.charge(budget, "b", 100_000)
+  limits.charge(budget, "c", 100_000) |> should.equal(Error("decode-budget"))
+  let budget = limits.release(budget, "a")
+  let assert Ok(_) = limits.charge(budget, "c", 100_000)
+
+  let stalls =
+    limits.new_stalls()
+    |> limits.mark_stall("slow", 0)
+    |> limits.mark_stall("later", 0)
+  let #(stalls, ids) = limits.take_stalls(stalls, 2001)
+  list.sort(ids, by: string.compare) |> should.equal(["later", "slow"])
+  stalls.timeout_ms |> should.equal(8000)
+  let stalls = limits.decay_stall(limits.clear_stall(stalls, "slow"))
+  stalls.timeout_ms |> should.equal(6800)
+
+  let assert Ok(paused) = limits.send_buffer(1_000_001, -1, 10)
+  paused |> should.equal(10)
+  limits.send_buffer(1_000_001, 10, 1211)
+  |> should.equal(Error("send-buffer"))
+  limits.send_buffer(1, 10, 99) |> should.equal(Ok(-1))
+
+  limits.orphan_count(limits.park(limits.new_house(), "k", 404_000, 0, "p"))
+  |> should.equal(1)
+  limits.orphan_count(limits.park(limits.new_house(), "d", 404_001, 0, "p"))
+  |> should.equal(0)
+  let house =
+    limits.new_house()
+    |> limits.park("old", 300_000, 0, "p")
+    |> limits.park("new", 300_000, 0, "p")
+  limits.orphan_ids(house) |> should.equal(["new"])
+  limits.orphan_count(limits.park(limits.new_house(), "big", 100, 30_000, "p"))
+  |> should.equal(0)
+  limits.orphan_count(limits.park(limits.new_house(), "edge", 100, 29_990, "p"))
+  |> should.equal(1)
+
+  let crowd =
+    range(0, 20)
+    |> list.map(fn(i) {
+      limits.Peer(
+        ..limits.candidate("p" <> int.to_string(i)),
+        connected: i,
+        min_ping: Some(i),
+        last_block_time: i,
+        last_tx_time: i,
+        keyed_netgroup: i,
+      )
+    })
+  let outbound = limits.Peer(..limits.candidate("out"), conn_type: "outbound")
+  let banned = limits.Peer(..limits.candidate("ban"), noban: True)
+  limits.select([outbound, banned, ..crowd]) |> should.equal(Ok("p8"))
+
+  let assert Ok(Nil) = p2p.hostile(18_479)
+  let assert Ok(reason) = p2p.punish("127.0.0.1", 18_479)
+  reason |> should.equal("oversized")
+  gleam_bitcoin_node.tip_hex(chain) |> should.equal(tip)
+  mempool.relay_inv(pool) |> should.equal(inv)
+}
+
+fn oversized_header() -> BitArray {
+  <<
+    0xfa,
+    0xbf,
+    0xb5,
+    0xda,
+    "ping":utf8,
+    0:size(64),
+    4_000_001:32-little,
+    0:size(32),
+  >>
+}
+
+fn fat_inv() -> BitArray {
+  let n = 50_001
+  <<253, n:16-little, zero_bytes(n * 36):bits>>
+}
+
+fn fat_addr() -> BitArray {
+  let n = 1001
+  <<253, n:16-little, zero_bytes(n * 30):bits>>
+}
+
+fn zero_bytes(n: Int) -> BitArray {
+  zero_blocks(n / 8192, n % 8192, <<>>)
+}
+
+fn zero_blocks(blocks: Int, rest: Int, acc: BitArray) -> BitArray {
+  case blocks {
+    0 -> zero_pages(rest / 256, rest % 256, acc)
+    _ -> zero_blocks(blocks - 1, rest, <<acc:bits, 0:size(65_536)>>)
+  }
+}
+
+fn zero_pages(pages: Int, rest: Int, acc: BitArray) -> BitArray {
+  case pages {
+    0 -> zero_tail(rest, acc)
+    _ -> zero_pages(pages - 1, rest, <<acc:bits, 0:size(2048)>>)
+  }
+}
+
+fn zero_tail(n: Int, acc: BitArray) -> BitArray {
+  case n {
+    0 -> acc
+    _ -> zero_tail(n - 1, <<acc:bits, 0>>)
+  }
 }
 
 fn hdr(args: String) -> String {
