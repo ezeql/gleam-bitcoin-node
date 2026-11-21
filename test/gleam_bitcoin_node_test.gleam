@@ -380,6 +380,53 @@ pub fn script_spend_test() {
   gleam_bitcoin_node.tip_hex(chain) |> should.equal(script_cli("getbestblockhash"))
 }
 
+pub fn utxo_set_test() {
+  start_node("/tmp/btc-utxo", "18453", "18454")
+  let chain = gleam_bitcoin_node.new()
+  expect_utxo(chain)
+  let chain = submit_utxo(chain, utxo_mine(4))
+  expect_utxo(chain)
+
+  let tip = utxo_cli("getbestblockhash")
+  let _ = utxo_cli("invalidateblock " <> tip)
+  let assert Ok(chain) = gleam_bitcoin_node.disconnect_tip(chain)
+  let chain = submit_utxo(chain, utxo_mine(2))
+  expect_utxo(chain)
+  gleam_bitcoin_node.tip_hex(chain) |> should.equal(utxo_cli("getbestblockhash"))
+}
+
+fn expect_utxo(chain) -> Nil {
+  let info = utxo_cli("gettxoutsetinfo")
+  let stats = gleam_bitcoin_node.utxo_stats(chain)
+  stats.hash |> should.equal(json_string(info, "hash_serialized_3"))
+  stats.txouts |> should.equal(json_int(info, "txouts"))
+  stats.transactions |> should.equal(json_int(info, "transactions"))
+  stats.bogosize |> should.equal(json_int(info, "bogosize"))
+}
+
+fn submit_utxo(chain, hashes: List(String)) {
+  list.fold(hashes, chain, fn(chain, hash) {
+    let assert Ok(raw) = hex_decode(utxo_cli("getblock " <> hash <> " 0"))
+    let assert Ok(chain) = gleam_bitcoin_node.submit_block(chain, raw)
+    chain
+  })
+}
+
+fn utxo_mine(n: Int) -> List(String) {
+  utxo_cli("generatetodescriptor " <> int.to_string(n) <> " \"raw(51)\"")
+  |> extract_hashes([])
+  |> list.reverse
+}
+
+fn utxo_cli(args: String) -> String {
+  cmd(
+    "bitcoin-cli -regtest -datadir=/tmp/btc-utxo -rpcport=18453 -rpcuser=e2e -rpcpassword=e2e "
+    <> args
+    <> " 2>/dev/null",
+  )
+  |> string.trim
+}
+
 fn script_block(height: Int) -> BitArray {
   let hex =
     script_cli(
