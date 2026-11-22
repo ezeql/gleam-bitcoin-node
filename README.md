@@ -1,17 +1,76 @@
 # gleam-bitcoin-node
 
-Experimental Gleam port of exnode. The package name is `gleam_bitcoin_node`. This cut connects regtest blocks, verifies scripts with libbitcoinkernel v32.1, and stores outputs, inputs, and witnesses only inside Docker. `hash_serialized_3` is the hash of the active UTXO set. More work replaces the tip. Equal work does not move it, and a reorg disconnects and reconnects. The P2P transport completes version/verack for v1 and for BIP324. Headers are requested with getheaders. Bodies are downloaded 16 at a time, and a compact block rebuilds to the same hash. The mempool accepts a package and rejects a replacement that pays a lower fee, matching `testmempoolaccept` and `sendrawtransaction`. A peer that sends a message over the size limit, or that fills the decode budget, the send buffer, or the orphan cap, is disconnected. The tip and the mempool stay as they were. Esplora serves the tip, the block, the transaction, the address, its UTXOs, and `POST /tx`. The scripthash index rewinds on a reorg. Chain JSON-RPC serves `getblockchaininfo`, `getblock`, `gettxout`, `getrawtransaction`, `gettxoutsetinfo`, and `submitblock` with the same tip, the same `hash_serialized_3`, and the same BIP22 reason as bitcoind. The basic BIP158 filter uses GCS with P=19 and M=784931. Its header and the `getcfilters`/`cfheaders` messages match Core `getblockfilter`. Shadow, a dataset replay, and the differential property leave the same tip and the same verdict as Core. Consensus flags depend on height. assumevalid set to zero does not skip those checks. It does not store the chain on disk, it does not listen on the network, and it does not keep a wallet. It is not safe for real funds.
+A Bitcoin node written in Gleam. Experimental port of [exnode](https://github.com/ezeql/exnode).
 
-The issues for the full port are at https://github.com/ezeql/gleam-bitcoin-node/issues.
+> **Status: experimental. Do not use it with real funds.**
 
-## Test
+The package name is `gleam_bitcoin_node`. It connects regtest blocks, checks scripts with Bitcoin Core v32.1 **libbitcoinkernel**, and keeps the archive inside Docker. It does not listen for peers, it does not keep a wallet, and it does not resume a chain on the host. Lightning is out of this cut.
+
+The issues for the port are at <https://github.com/ezeql/gleam-bitcoin-node/issues>.
+
+## How it works
+
+The library is one chain value plus the modules that feed it. There is no supervision tree.
+
+```
+gleam_bitcoin_node
+├─ params, pow, headers     five networks, proof of work, header rules
+├─ codec, tx, merkle        blocks, transactions, txid and witness roots
+├─ chain, consensus         connect, disconnect, and pick the most work
+├─ kernel, script           libbitcoinkernel v32.1, flags by height
+├─ utxo                     active set and hash_serialized_3
+├─ p2p, limits, compact     v1 and BIP324, headers, blocks, DoS caps
+├─ mempool                  packages and replacement
+└─ rpc, esplora, filter     JSON-RPC, Esplora, BIP158
+```
+
+Public entry points are in [`gleam_bitcoin_node`](src/gleam_bitcoin_node.gleam). Chain selection is in [`chain`](src/gleam_bitcoin_node/chain.gleam).
+
+### A block from bitcoind to the tip
+
+1. **P2P** completes `version`/`verack` on v1 or BIP324, then asks for headers with `getheaders`. Bodies are not requested during header sync.
+2. **Headers** checks proof of work, bits, version, and time. More work moves the header tip. Illegal bits or time do not.
+3. **Download** pulls bodies 16 at a time. A compact block is rebuilt to the same hash.
+4. **Chain** checks the merkle root, the coinbase, and the subsidy, then connects the block. An invalid script does not move the tip.
+5. **Kernel** runs the scripts. Consensus flags follow the height. `assumevalid` set to zero does not skip those checks.
+6. **UTXO** records outputs, inputs, and witnesses for the active chain. `hash_serialized_3` is the hash of that set. More work replaces the tip. Equal work does not. A reorg disconnects and reconnects, and the scripthash index rewinds with it.
+
+## Storage
+
+Outputs, inputs, and witnesses are append-only segment files under `/tmp/gleam-archive` inside the container. `make test` uses `docker run --rm`, so those files go away with the container. There is no host datadir.
+
+## Surfaces
+
+These answers are checked against bitcoind in `make test`.
+
+| Surface | What matches |
+|---|---|
+| JSON-RPC | `getblockchaininfo`, `getblockhash`, `getblock`, `gettxout`, `getrawtransaction`, `gettxoutsetinfo`, `submitblock`. Same tip, same `hash_serialized_3`, same BIP22 reason. |
+| Esplora | `/blocks/tip/hash`, `/blocks/tip/height`, `/block/:hash`, `/tx/:txid`, `/address/:addr`, `/address/:addr/utxo`, `POST /tx`. |
+| BIP158 | Basic filter, GCS P=19 and M=784931. Header and `getcfilters`/`cfheaders` match `getblockfilter`. |
+| Mempool | An accepted package and a replacement that pays less. Same verdict as `testmempoolaccept` and `sendrawtransaction`. |
+| DoS | An oversized message, a full decode budget, a full send buffer, or a full orphan cap disconnects the peer. The tip and the mempool stay as they were. |
+| Shadow | A valid block and a bad coinbase get Core's verdict. A dataset replay ends at the manifest hash. |
+
+`submitblock` of bitcoind and Gleam return the same reason for `bad-cb-amount`, `bad-txns-nonfinal`, and `bad-cb-height`. Genesis hashes for mainnet, testnet, testnet4, signet, and regtest match `getblockhash 0`.
+
+## Tests
 
 Nothing is installed on the machine. Docker is required.
 
-```
+```sh
 make test
 ```
 
-That also runs `gleam format --check` and `gleam build --warnings-as-errors` inside the image. Those are the checks Gleam documents for CI: the official formatter and compiler warnings.
+The image build runs the checks Gleam documents for CI, then the end-to-end tests:
 
-It builds an image with Gleam and Bitcoin Core 32.1, mines empty regtest blocks, and compares the tip. A block with a bad merkle root is rejected and the tip stays put. bitcoind and Gleam `submitblock` return the same reason for bad-cb-amount, bad-txns-nonfinal, and bad-cb-height. A block with a real spend is accepted. An invalid script does not move the tip. The genesis hash of mainnet, testnet, testnet4, signet, and regtest must match bitcoind. Headers mined by bitcoind are accepted. One with illegal bits or time does not move the header tip.
+```sh
+gleam format --check
+gleam build --warnings-as-errors
+```
+
+`make test` builds an image with Gleam and Bitcoin Core 32.1, mines empty regtest blocks, and compares the tip. A block with a bad merkle root is rejected and the tip stays put. A block with a real spend is accepted. Headers mined by bitcoind are accepted. One with illegal bits or time does not move the header tip.
+
+## License
+
+MIT. See [`LICENSE`](LICENSE).
